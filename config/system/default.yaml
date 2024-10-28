@@ -1,0 +1,16 @@
+system:
+  data:
+    base_dir: "data"
+    structure:
+      results: "experiment_results"
+      logs: "logs"
+      temp: "temp"
+  
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    
+  backup:
+    enabled: false
+    interval_hours: 24
+    retention_days: 7
