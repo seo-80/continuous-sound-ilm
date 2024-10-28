@@ -372,8 +372,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             self._init_params(self.X, random_state=random_state)
         elif self.X is not None and self.C is not None:
             self.X = np.vstack([self.X, X])
-            self.C = np.hstack([self.C, C])
-
+            self.C = np.vstack([self.C, C])
 
         r = self._e_like_step(self.X, self.C)
         lower_bound = self._calc_lower_bound(r)
@@ -486,3 +485,25 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 )
         
         return X_new, C_new
+    
+    def predict_proba(self, data):
+        '''
+        Method for calculating and returning the probability of belonging to each component.
+
+        Parameters
+        ----------
+        data : 2D numpy array or tuple of 2D numpy arrays
+            If data is a 2D numpy array, it represents input data X, where X[n, i] represents the i-th element of n-th point in X.
+            If data is a tuple of 2D numpy arrays (X, C), X[n, i] represents the i-th element of n-th point in X, and C[n, k] represents the k-th element of context for n-th point in X.
+
+        Returns
+        ----------
+        proba : 2D numpy array
+            A numpy array with shape (len(X), self.K), where proba[n, k] =  p(z_k=1 | X[n], C[n], training data)
+        '''
+        if isinstance(data, tuple):
+            X, C = data
+        else:
+            X = data
+        joint_proba = self._predict_joint_proba(X)
+        return joint_proba / joint_proba.sum(axis=1).reshape(-1, 1)

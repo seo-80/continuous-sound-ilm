@@ -18,7 +18,7 @@ true_K = 4
 D = 2  # 次元数
 N = 1000  # サンプル数
 filter_name = "high_entropy"    
-filter_name = "none"    
+# filter_name = "none"    
 
 # 真の混合ガウス分布のパラメータ
 true_alpha = np.array([1/true_K, 1/true_K, 1/true_K, 1/true_K])
@@ -110,22 +110,41 @@ for i in tqdm.tqdm(range(iter)):
         child_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0)
     retry_count = []
     if filter_name is not "none":
-        for di in range(N):
-            data_stock = parent_agent.generate(N)
-            count = 0
-            retry = 0
-            while True:
-                if count >= N:
-                    data_stock = parent_agent.generate(N)
-                    count = 0
-                data = data_stock[count].reshape(1, -1)
-                if filter_func(data, child_agent, config['filter_args'])[0]:
-                    child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
-                    break
-                retry += 1
-                count += 1
-            retry_count.append(retry)
-        print(retry_count)
+        if agent == "BayesianGaussianMixtureModelWithContext":
+            for di in range(N):
+                X_stock, C_stock = parent_agent.generate(N)
+                count = 0
+                retry = 0
+                while True:
+                    if count >= N:
+                        X_stock, C_stock = parent_agent.generate(N)
+                        count = 0
+                    data = X_stock[count].reshape(1, -1)
+                    context = C_stock[count].reshape(1, -1)
+                    if filter_func(data, child_agent, config['filter_args'])[0]:
+                        child_agent.fit(data, context, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
+                        break
+                    retry += 1
+                    count += 1
+                retry_count.append(retry)
+
+        elif agent == "BayesianGaussianMixtureModel":
+            for di in range(N):
+                data_stock = parent_agent.generate(N)
+                count = 0
+                retry = 0
+                while True:
+                    if count >= N:
+                        data_stock = parent_agent.generate(N)
+                        count = 0
+                    data = data_stock[count].reshape(1, -1)
+                    if filter_func(data, child_agent, config['filter_args'])[0]:
+                        child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
+                        break
+                    retry += 1
+                    count += 1
+                retry_count.append(retry)
+            print(retry_count)
     else:
         data = parent_agent.generate(N)
         if isinstance(data, tuple):
@@ -140,15 +159,16 @@ for i in tqdm.tqdm(range(iter)):
     params["m"][i] = child_agent.m
     params["W"][i] = child_agent.W
     parent_agent = child_agent
-
+print(X)
+print(X.shape)
 #save data
 folder_name = datetime.now().strftime("%Y%m%d%H%M%S")
 DATA_DIR = os.path.join(DATA_DIR, folder_name)
-os.makedirs(DATA_DIR, exist_ok=True)
-np.save(os.path.join(DATA_DIR, "data.npy"), X)
-np.save(os.path.join(DATA_DIR, "retry_counts.npy"), retry_counts)
-np.save(os.path.join(DATA_DIR, "params.npy"), params)
+# os.makedirs(DATA_DIR, exist_ok=True)
+# np.save(os.path.join(DATA_DIR, "data.npy"), X)
+# np.save(os.path.join(DATA_DIR, "retry_counts.npy"), retry_counts)
+# np.save(os.path.join(DATA_DIR, "params.npy"), params)
 
-with open(os.path.join(DATA_DIR, "config.json"), "w") as f:
-    json.dump(config, f)
+# with open(os.path.join(DATA_DIR, "config.json"), "w") as f:
+    # json.dump(config, f)
 

@@ -99,7 +99,7 @@ config = {
 # ax.set_ylim(-10, 10)
 # plt.show()
 
-モデルをフィッティング
+# モデルをフィッティング
 X = []
 X.append((X_0))
 parent_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0)
