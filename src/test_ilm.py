@@ -23,6 +23,8 @@ filter_name = "high_entropy"
 # 真の混合ガウス分布のパラメータ
 true_alpha = np.array([1/true_K, 1/true_K, 1/true_K, 1/true_K])
 true_means = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
+true_means = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
+
 true_covars = np.array([[[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
@@ -56,6 +58,7 @@ beta0 = 1.0
 nu0 = D + 2.0
 m0 = np.zeros(D)
 m0 = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
+m0 = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
 # m0 = np.array([[0, 0], [-5, 5], [5, -5], [-5, -5]])
 W0 = np.eye(D)*0.02
 
@@ -159,16 +162,14 @@ for i in tqdm.tqdm(range(iter)):
     params["m"][i] = child_agent.m
     params["W"][i] = child_agent.W
     parent_agent = child_agent
-print(X)
-print(X.shape)
 #save data
 folder_name = datetime.now().strftime("%Y%m%d%H%M%S")
 DATA_DIR = os.path.join(DATA_DIR, folder_name)
-# os.makedirs(DATA_DIR, exist_ok=True)
-# np.save(os.path.join(DATA_DIR, "data.npy"), X)
-# np.save(os.path.join(DATA_DIR, "retry_counts.npy"), retry_counts)
-# np.save(os.path.join(DATA_DIR, "params.npy"), params)
+os.makedirs(DATA_DIR, exist_ok=True)
+np.save(os.path.join(DATA_DIR, "data.npy"), X)
+np.save(os.path.join(DATA_DIR, "retry_counts.npy"), retry_counts)
+np.save(os.path.join(DATA_DIR, "params.npy"), params)
 
-# with open(os.path.join(DATA_DIR, "config.json"), "w") as f:
-    # json.dump(config, f)
+with open(os.path.join(DATA_DIR, "config.json"), "w") as f:
+    json.dump(config, f)
 
