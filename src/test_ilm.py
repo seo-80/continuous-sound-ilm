@@ -1,4 +1,5 @@
 import numpy as np
+import xarray as xr
 from agents import BayesianGaussianMixtureModel, BayesianGaussianMixtureModelWithContext
 import matplotlib.pyplot as plt
 import tqdm
@@ -10,6 +11,7 @@ from datetime import datetime
 import os
 import json
 
+SAVE_RESULT = True
 DATA_DIR = os.path.dirname(__file__) +"/../data/"
 # 合成データを生成
 np.random.seed(0)
@@ -18,12 +20,13 @@ true_K = 4
 D = 2  # 次元数
 N = 1000  # サンプル数
 filter_name = "high_entropy"    
+filter_name = "low_max_prob"
 # filter_name = "none"    
 
 # 真の混合ガウス分布のパラメータ
 true_alpha = np.array([1/true_K, 1/true_K, 1/true_K, 1/true_K])
 true_means = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
-true_means = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
+# true_means = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
 
 true_covars = np.array([[[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
@@ -39,8 +42,19 @@ def filter_high_entropy(data, model, args):
     entropy = -np.sum(p * np.log(p), axis=1)
     # print(p, entropy)
     return entropy < threshold
+
+def filter_low_max_prob(data, model, args):
+    threshold = args["threshold"]
+    p = model.predict_proba(data)
+    max_prob = np.max(p, axis=1)
+    return max_prob > threshold
+
+
+
 if filter_name == "high_entropy":
     filter_func = filter_high_entropy
+if filter_name == "low_max_prob":
+    filter_func = filter_low_max_prob
 if filter_name == "none":
     filter_func = lambda x, y, z: [True]
 # サンプルを生成
@@ -53,12 +67,17 @@ for k in range(true_K):
 # モデルを初期化
 alpha0 = 1.0
 alpha0 = 100.0
-c_alpha = 0.1
+c_alpha = np.array(
+    [[2, 2, 1/16, 1/16],
+    [1/16, 1/16, 2, 2]]
+)
+    # if c_alpha is None, agent inferes alpha and use it to generate data
+# c_dirichlet_weight = [1, 1, 1, 1]
 beta0 = 1.0
 nu0 = D + 2.0
 m0 = np.zeros(D)
 m0 = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
-m0 = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
+# m0 = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
 # m0 = np.array([[0, 0], [-5, 5], [5, -5], [-5, -5]])
 W0 = np.eye(D)*0.02
 
@@ -82,7 +101,7 @@ config = {
     "iter": iter,   
     "filter_func": filter_name,
     "filter_args": {
-        "threshold": 0.125
+        "threshold": 1-1/16
     }
 }
 
@@ -94,10 +113,18 @@ X = []
 X.append((X_0))
 if agent == "BayesianGaussianMixtureModelWithContext":
     parent_agent = BayesianGaussianMixtureModelWithContext(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
-    parent_agent.fit(X_0, C, max_iter=1000, tol=1e-6, random_state=0, disp_message=True)
+    parent_agent.fit(xr.Dataset({
+        "X": (["n", "d"], X_0),
+        "C": (["n", "k"], C),
+    },
+    coords = {"n": np.arange(N), "d": np.arange(D), "k": np.arange(K)}
+    ), max_iter=1000, tol=1e-6, random_state=0, disp_message=True)
 elif agent == "BayesianGaussianMixtureModel":
-    parent_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0)
-    parent_agent.fit(X_0, max_iter=1000, tol=1e-6, random_state=0, disp_message=True)
+    parent_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
+    parent_agent.fit(xr.Dataset({
+        "X": (["n", "d"], X_0),
+    },coords={"n": np.arange(N), "d": np.arange(D)}
+    ), max_iter=1000, tol=1e-6, random_state=0, disp_message=True)
 params = {
     "alpha": np.zeros((iter, )+parent_agent.alpha.shape),
     "beta": np.zeros((iter, )+parent_agent.beta.shape),
@@ -110,22 +137,21 @@ for i in tqdm.tqdm(range(iter)):
     if agent == "BayesianGaussianMixtureModelWithContext":
         child_agent = BayesianGaussianMixtureModelWithContext(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
     elif agent == "BayesianGaussianMixtureModel":
-        child_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0)
+        child_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
     retry_count = []
-    if filter_name is not "none":
+    if filter_name != "none":
         if agent == "BayesianGaussianMixtureModelWithContext":
             for di in range(N):
-                X_stock, C_stock = parent_agent.generate(N)
+                data_stock = parent_agent.generate(N)
                 count = 0
                 retry = 0
                 while True:
                     if count >= N:
-                        X_stock, C_stock = parent_agent.generate(N)
+                        data_stock = parent_agent.generate(N)
                         count = 0
-                    data = X_stock[count].reshape(1, -1)
-                    context = C_stock[count].reshape(1, -1)
+                    data = data_stock.sel(n=count)
                     if filter_func(data, child_agent, config['filter_args'])[0]:
-                        child_agent.fit(data, context, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
+                        child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
                         break
                     retry += 1
                     count += 1
@@ -140,7 +166,7 @@ for i in tqdm.tqdm(range(iter)):
                     if count >= N:
                         data_stock = parent_agent.generate(N)
                         count = 0
-                    data = data_stock[count].reshape(1, -1)
+                    data = data_stock.sel(n=count)
                     if filter_func(data, child_agent, config['filter_args'])[0]:
                         child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
                         break
@@ -162,7 +188,11 @@ for i in tqdm.tqdm(range(iter)):
     params["m"][i] = child_agent.m
     params["W"][i] = child_agent.W
     parent_agent = child_agent
+
+
 #save data
+if not SAVE_RESULT:
+    exit()
 folder_name = datetime.now().strftime("%Y%m%d%H%M%S")
 DATA_DIR = os.path.join(DATA_DIR, folder_name)
 os.makedirs(DATA_DIR, exist_ok=True)

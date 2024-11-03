@@ -1,4 +1,5 @@
 import numpy as np
+import xarray as xr
 from scipy.special import digamma, gammaln, gamma
 def logB(W, nu):
     D = W.shape[-1]
@@ -29,7 +30,7 @@ def multi_student_t(X, m, L, nu):
 
 class BayesianGaussianMixtureModel:
 
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0):
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None):
         self.K = K
         self.D = D
         if isinstance(alpha0, (int, float, complex)):
@@ -38,6 +39,18 @@ class BayesianGaussianMixtureModel:
             self.alpha0 = alpha0
         else:
             raise ValueError("The shape of alpha0 is invalid.")
+        if isinstance(c_alpha, (int, float, complex)):
+            self.c_alpha = c_alpha * np.ones(K)
+        elif isinstance(c_alpha, np.ndarray) :
+            self.c_alpha = c_alpha
+            if c_alpha.shape != (K,):
+                self.mixture_pi = True
+                self.comopnent_num = c_alpha.shape[0]
+                self.pi_mixture_ratio = pi_mixture_ratio if pi_mixture_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num
+            else:
+                self.mixture_pi = False
+        else:
+            raise ValueError("The shape of c_alpha is invalid.")
         self.beta0 = beta0
         self.nu0 = nu0
         if m0.shape == (D,):
@@ -105,7 +118,13 @@ class BayesianGaussianMixtureModel:
         '''
         N, _ = np.shape(X)
 
-        tpi = np.exp( digamma(self.alpha) - digamma(self.alpha.sum()) )
+        if self.c_alpha is None:
+            tpi = np.exp( digamma(self.alpha) - digamma(self.alpha.sum()) )
+        else:
+            if self.mixture_pi:
+                tpi = np.sum(self.c_alpha, axis=0)/np.sum(self.c_alpha)
+            else:
+                tpi = self.c_alpha/np.sum(self.c_alpha)
 
         arg_digamma = np.reshape(self.nu, (self.K, 1)) - np.reshape(np.arange(0, self.D, 1), (1, self.D))
         tlam = np.exp( digamma(arg_digamma/2).sum(axis=1)  + self.D * np.log(2) + np.log(np.linalg.det(self.W)) )
@@ -169,7 +188,7 @@ class BayesianGaussianMixtureModel:
             self.K * logB(self.W0, self.nu0) - logB(self.W, self.nu).sum()
 
 
-    def fit(self, X, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
+    def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
         '''
         Method for fitting the model.
 
@@ -188,10 +207,12 @@ class BayesianGaussianMixtureModel:
             Whether to show the message on the result.
         '''
         if self.X is None:
-            self.X = X 
+            self.X = data.X.values
+            if len(self.X.shape) == 1:
+                self.X = self.X.reshape(1, -1)
             self._init_params(self.X, random_state=random_state)
         else:
-            self.X = np.vstack([self.X, X])
+            self.X = np.vstack([self.X, data.X.values])
 
         r = self._e_like_step(self.X)
         lower_bound = self._calc_lower_bound(r)
@@ -273,7 +294,7 @@ class BayesianGaussianMixtureModel:
         joint_proba = self._predict_joint_proba(X)
         return joint_proba.sum(axis=1)
 
-    def predict_proba(self, X):
+    def predict_proba(self, data):
         '''
         Method for calculating and returning the probability of belonging to each component.
 
@@ -287,6 +308,12 @@ class BayesianGaussianMixtureModel:
         proba : 2D numpy array
             A numpy array with shape (len(X), self.K), where proba[n, k] =  p(z_k=1 | X[n], training data)
         '''
+        if isinstance(data, xr.Dataset):
+            X = data.X.values
+            if len(X.shape) == 1:
+                X= X.reshape(1, -1)
+        else:
+            X = data
         joint_proba = self._predict_joint_proba(X)
         return joint_proba / joint_proba.sum(axis=1).reshape(-1, 1)
 
@@ -318,11 +345,23 @@ class BayesianGaussianMixtureModel:
 
         Returns
         ----------
-        X_new : 2D numpy array
-            A numpy array with shape (n_samples, self.D), where X_new[n] is the n-th generated sample.
+        data : dict
+            A dictionary containing the generated data, where data['X'] is the generated data.
         '''
-        alpha_norm = self.alpha / self.alpha.sum()
-        z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
+        if self.c_alpha is None:
+            alpha_norm = self.alpha / self.alpha.sum()
+            z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
+        else:
+            if self.mixture_pi:
+                comopnent_idx = np.random.choice(self.comopnent_num, size=n_samples, p=self.pi_mixture_ratio)
+                z_new = []
+                for i in range(n_samples):
+                    alpha_norm = self.c_alpha[comopnent_idx[i]]/np.sum(self.c_alpha[comopnent_idx[i]])
+                    z_new.append(np.random.multinomial(1, alpha_norm, size=1))
+                z_new = np.vstack(z_new)
+            else:
+               alpha_norm = self.c_alpha/np.sum(self.c_alpha)
+               z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
         X_new = np.zeros((n_samples, self.D))
         
         for k in range(self.K):
@@ -334,19 +373,21 @@ class BayesianGaussianMixtureModel:
                     size=len(idx)
                 )
         
-        return X_new
+        ret_ds = xr.Dataset(
+            {
+                'X': (['n', 'd'], X_new),
+            },
+            coords={'n': np.arange(n_samples), 'd': np.arange(self.D)}
+        )
+        return ret_ds
 
 
 class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha):
-        super().__init__(K, D, alpha0, beta0, nu0, m0, W0)
-        if isinstance(c_alpha, (int, float, complex)):
-            self.c_alpha = c_alpha * np.ones(K)
-        elif c_alpha.shape == (K,):
-            self.c_alpha = c_alpha
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None):
+        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio)
         self.C = None
 
-    def fit(self, X, C, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
+    def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
         '''
         Method for fitting the model.
 
@@ -367,12 +408,14 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             Whether to show the message on the result.
         '''
         if self.X is None and self.C is None:
-            self.X = X 
-            self.C = C
+            self.X = data.X.values
+            self.C = data.C.values
+            if len(self.X.shape) == 1:
+                self.X, self.C = self.X.reshape(1, -1), self.C.reshape(1, -1)
             self._init_params(self.X, random_state=random_state)
         elif self.X is not None and self.C is not None:
-            self.X = np.vstack([self.X, X])
-            self.C = np.vstack([self.C, C])
+            self.X = np.vstack([self.X, data.X.values])
+            self.C = np.vstack([self.C, data.C.values])
 
         r = self._e_like_step(self.X, self.C)
         lower_bound = self._calc_lower_bound(r)
@@ -470,9 +513,25 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         C_new : 1D numpy array
             A numpy array with shape (n_samples, ), where C_new[n] is the context of the n-th generated sample.
         '''
-        alpha_norm = self.alpha / self.alpha.sum()
-        C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
-        z_new = np.array([np.random.multinomial(1, c) for c in C_new])
+        if self.c_alpha is None:
+            alpha_norm = self.alpha / self.alpha.sum()
+            z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
+            C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
+        else:
+            if self.mixture_pi:
+                comopnent_idx = np.random.choice(self.comopnent_num, size=n_samples, p=self.pi_mixture_ratio)
+                z_new = []
+                C_new = []
+                for i in range(n_samples):
+                    alpha_norm = self.c_alpha[comopnent_idx[i]]/np.sum(self.c_alpha[comopnent_idx[i]])
+                    z_new.append(np.random.multinomial(1, alpha_norm, size=1))
+                    C_new.append(np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1))
+                z_new = np.vstack(z_new)
+                C_new = np.vstack(C_new)
+            else:
+                alpha_norm = self.c_alpha/np.sum(self.c_alpha)
+                z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
+                C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
         X_new = np.zeros((n_samples, self.D))
         
         for k in range(self.K):
@@ -483,8 +542,14 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     np.linalg.inv(self.beta[k] * self.W[k]),
                     size=len(idx)
                 )
-        
-        return X_new, C_new
+        ret_ds = xr.Dataset(
+            {
+                'X': (['n', 'd'], X_new),
+                'C': (['n', 'k'], C_new),
+            },
+            coords={'n': np.arange(n_samples), 'd': np.arange(self.D), 'k': np.arange(self.K)}
+        )
+        return ret_ds                                                                               
     
     def predict_proba(self, data):
         '''
@@ -503,7 +568,33 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         '''
         if isinstance(data, tuple):
             X, C = data
+        elif isinstance(data, xr.Dataset):
+            X = data.X.values
+            C = data.C.values
+            if len(X.shape) == 1:
+                X, C = X.reshape(1, -1), C.reshape(1, -1)
         else:
             X = data
-        joint_proba = self._predict_joint_proba(X)
+        joint_proba = self._predict_joint_proba(X, C)
         return joint_proba / joint_proba.sum(axis=1).reshape(-1, 1)
+    def _predict_joint_proba(self, X, C):
+        '''
+        Method for calculating and returning the joint probability.     
+
+        Parameters
+        ----------
+        X : 2D numpy array
+            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
+        C : 1D numpy array
+            1D numpy array representing context data, where C[n] represents the context of n-th point in X.
+
+        Returns
+        ----------
+        joint_proba : 2D numpy array
+            A numpy array with shape (len(X), self.K), where joint_proba[n, k] = joint probability p(X[n], z_k=1 | training data)
+        '''
+        L = np.reshape( (self.nu + 1 - self.D)*self.beta/(1 + self.beta), (self.K, 1,1) ) * self.W
+        tmp = np.zeros((len(X), self.K))
+        for k in range(self.K):
+            tmp[:,k] = multi_student_t(X, self.m[k], L[k], self.nu[k] + 1 - self.D)
+        return tmp * C
