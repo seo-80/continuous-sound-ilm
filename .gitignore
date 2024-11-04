@@ -1,0 +1,15 @@
+# VS Code ディレクトリ
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# その他の一般的な一時ファイル
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# data ディレクトリ
+data/

@@ -6,7 +6,25 @@ from scipy.stats import multivariate_normal
 import numpy as np
 import os
 import json
+import xarray as xr
+import sys
+import argparse
+from pathlib import Path
 
+
+
+
+
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from src.utils import metrics, converters
+
+parser = argparse.ArgumentParser(description='Process some data.')
+
+parser.add_argument('--folder_name', type=str, default=None, help='input file path')
+
+
+folder_name = parser.parse_args().folder_name
 
 
 #load data
@@ -92,30 +110,48 @@ def dict_equal(d1, d2):
         return d1 == d2
 print(config)
 matched_data = []   
-for folder_name in folder_names:
-    if os.path.exists(DATA_DIR+folder_name+"/config.json"):
-        with open(DATA_DIR+folder_name+"/config.json") as f:
-            temp_config = json.load(f)
-        if dict_equal(temp_config, config):
-            X = np.load(DATA_DIR+folder_name+"/data.npy")
-            params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
-            retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
-            matched_data.append((X, params, retry_counts, folder_name))
-            print("load", folder_name)
+if folder_name:
+    X = np.load(DATA_DIR+folder_name+"/data.npy")
+    params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
+    retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
+    metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
+    matched_data.append((X, params, retry_counts, folder_name, metrics_data))
+    print("load", folder_name)
+else:
+    for folder_name in folder_names:
+        if os.path.exists(DATA_DIR+folder_name+"/config.json"):
+            with open(DATA_DIR+folder_name+"/config.json") as f:
+                temp_config = json.load(f)
+            if dict_equal(temp_config, config):
+                X = np.load(DATA_DIR+folder_name+"/data.npy")
+                params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
+                retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
+                matched_data.append((X, params, retry_counts, folder_name))
+                print("load", folder_name)
             
     
 if "X" not in locals():
     print("Not Found")
     exit()
 
-for X, params, retry_counts, folder_name in matched_data:
-    # fig, axs = plt.subplots()
-    # axs.plot(retry_counts)
-    # plt.show()
-    # fig, axs = plt.subplots()
-    # # Calculate the distance from the center for each cluster
+for X, params, retry_counts, folder_name, metrics in matched_data:
+    # plot metrics
+    ## plot expected_mahalanobis mean
+    fig, axs = plt.subplots()
+    expected_mahalanobis_mean = metrics_data['expected_mahalanobis'].mean(dim='simulation')
+    im = axs.imshow(expected_mahalanobis_mean, cmap='viridis', origin='lower')
+    axs.set_xticks(range(expected_mahalanobis_mean.shape[1]))
+    axs.set_yticks(range(expected_mahalanobis_mean.shape[0]))
+    axs.set_xticklabels(range(1, expected_mahalanobis_mean.shape[1]+1))
+    axs.set_yticklabels(range(1, expected_mahalanobis_mean.shape[0]+1))
+    axs.set_xlabel('Component')
+    axs.set_ylabel('Component')
+    axs.invert_yaxis()
+    cbar = fig.colorbar(im)
+    cbar.set_label('Expected Mahalanobis Distance')
+    plt.savefig(os.path.join(DATA_DIR, folder_name,"expected_mahalanobis_mean.png"))
 
-    # Plot the trajectory of params["m"] in 2D space
+
     fig, axs = plt.subplots()
     # Create a colormap
     colors = plt.cm.viridis(np.linspace(0, 1, iter))

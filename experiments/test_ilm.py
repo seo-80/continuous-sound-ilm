@@ -1,6 +1,6 @@
 import numpy as np
 import xarray as xr
-from agents import BayesianGaussianMixtureModel, BayesianGaussianMixtureModelWithContext
+import sys
 import matplotlib.pyplot as plt
 import tqdm
 from scipy.stats import multivariate_normal
@@ -10,6 +10,11 @@ import sqlite3
 from datetime import datetime
 import os
 import json
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from src.agents import BayesianGaussianMixtureModel, BayesianGaussianMixtureModelWithContext
+
 
 SAVE_RESULT = True
 DATA_DIR = os.path.dirname(__file__) +"/../data/"
@@ -190,13 +195,15 @@ for i in tqdm.tqdm(range(iter)):
     parent_agent = child_agent
 
 
-#save data
+#save datax
 if not SAVE_RESULT:
     exit()
 folder_name = datetime.now().strftime("%Y%m%d%H%M%S")
 DATA_DIR = os.path.join(DATA_DIR, folder_name)
 os.makedirs(DATA_DIR, exist_ok=True)
 np.save(os.path.join(DATA_DIR, "data.npy"), X)
+if agent == "BayesianGaussianMixtureModelWithContext":
+    np.save(os.path.join(DATA_DIR, "context.npy"), C)
 np.save(os.path.join(DATA_DIR, "retry_counts.npy"), retry_counts)
 np.save(os.path.join(DATA_DIR, "params.npy"), params)
 
