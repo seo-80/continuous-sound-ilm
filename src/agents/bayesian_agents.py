@@ -386,6 +386,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
     def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None):
         super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio)
         self.C = None
+        self.Z = None
 
     def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
         '''
@@ -410,12 +411,15 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         if self.X is None and self.C is None:
             self.X = data.X.values
             self.C = data.C.values
+            self.Z = data.Z.values
             if len(self.X.shape) == 1:
-                self.X, self.C = self.X.reshape(1, -1), self.C.reshape(1, -1)
+                self.X, self.C, self.Z = self.X.reshape(1, -1), self.C.reshape(1, -1), self.Z.reshape(1, -1)
             self._init_params(self.X, random_state=random_state)
         elif self.X is not None and self.C is not None:
             self.X = np.vstack([self.X, data.X.values])
             self.C = np.vstack([self.C, data.C.values])
+            self.Z = np.vstack([self.Z, data.Z.values])
+
 
         r = self._e_like_step(self.X, self.C)
         lower_bound = self._calc_lower_bound(r)
@@ -431,6 +435,11 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 break
 
         self.lower_bound = lower_bound
+        # for i in range(len(self.X)):
+        #     print('x:',self.X[i])
+        #     print('c:',self.C[i])
+        #     print('z:',self.Z[i])
+        #     print('---------')
 
         if disp_message:
             print(f"n_iter : {i}")
@@ -467,6 +476,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         exponent_subtracted = exponent - np.reshape(exponent.min(axis=1), (N, 1))
         rho = tpi*np.sqrt(tlam)*np.exp( -0.5 * exponent_subtracted )
         r = rho/np.reshape(rho.sum(axis=1), (N, 1))
+
 
         return r
     def _m_like_step(self, X, r):
@@ -528,6 +538,8 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     C_new.append(np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1))
                 z_new = np.vstack(z_new)
                 C_new = np.vstack(C_new)
+                # for i in range(n_samples):
+                #     print(z_new[i], C_new[i],comopnent_idx[i])
             else:
                 alpha_norm = self.c_alpha/np.sum(self.c_alpha)
                 z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
@@ -542,10 +554,14 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     np.linalg.inv(self.beta[k] * self.W[k]),
                     size=len(idx)
                 )
+            print('z:',z_new)
+            print('idx:',idx)
+            print('X:',X_new)
         ret_ds = xr.Dataset(
             {
                 'X': (['n', 'd'], X_new),
                 'C': (['n', 'k'], C_new),
+                'Z': (['n', 'k'], z_new),
             },
             coords={'n': np.arange(n_samples), 'd': np.arange(self.D), 'k': np.arange(self.K)}
         )

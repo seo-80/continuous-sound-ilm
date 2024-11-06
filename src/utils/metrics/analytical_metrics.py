@@ -76,8 +76,8 @@ class MixtureDirichletGaussianWishartEvaluator:
                 d = mean_diff.shape[0]
                 
                 # 共分散の期待値の逆行列
-                print(params_i['Psi_0'])
-                print(params_i['nu_0'])
+                # print(params_i['Psi_0'])
+                # print(params_i['nu_0'])
                 exp_cov_sum = (params_i['Psi_0'] / (params_i['nu_0'] - d - 1) + 
                              params_j['Psi_0'] / (params_j['nu_0'] - d - 1)) / 2
                 

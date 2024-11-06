@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from src.utils import metrics, converters
+from src.utils import metrics
 
 parser = argparse.ArgumentParser(description='Process some data.')
 
@@ -126,7 +126,8 @@ else:
                 X = np.load(DATA_DIR+folder_name+"/data.npy")
                 params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
                 retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
-                matched_data.append((X, params, retry_counts, folder_name))
+                metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
+                matched_data.append((X, params, retry_counts, folder_name, metrics_data))
                 print("load", folder_name)
             
     
@@ -150,6 +151,22 @@ for X, params, retry_counts, folder_name, metrics in matched_data:
     cbar = fig.colorbar(im)
     cbar.set_label('Expected Mahalanobis Distance')
     plt.savefig(os.path.join(DATA_DIR, folder_name,"expected_mahalanobis_mean.png"))
+
+    ## plot expected_overlap mean
+    fig, axs = plt.subplots()
+    expected_overlap_mean = metrics_data['expected_overlap'].mean(dim='simulation')
+    im = axs.imshow(expected_overlap_mean, cmap='viridis', origin='lower')
+    axs.set_xticks(range(expected_overlap_mean.shape[1]))
+    axs.set_yticks(range(expected_overlap_mean.shape[0]))
+    axs.set_xticklabels(range(1, expected_overlap_mean.shape[1]+1))
+    axs.set_yticklabels(range(1, expected_overlap_mean.shape[0]+1))
+    axs.set_xlabel('Component')
+    axs.set_ylabel('Component')
+    axs.invert_yaxis()
+    cbar = fig.colorbar(im)
+    cbar.set_label('Expected Overlap')
+    plt.savefig(os.path.join(DATA_DIR, folder_name,"expected_overlap_mean.png"))
+    
 
 
     fig, axs = plt.subplots()
