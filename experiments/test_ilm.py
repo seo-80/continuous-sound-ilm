@@ -26,6 +26,7 @@ D = 2  # 次元数
 N = 1000  # サンプル数
 filter_name = "high_entropy"    
 # filter_name = "low_max_prob"
+filter_name = "missunderstand"
 # filter_name = "none"    
 
 # 真の混合ガウス分布のパラメータ
@@ -55,12 +56,20 @@ def filter_low_max_prob(data, model, args):
     max_prob = np.max(p, axis=1)
     return max_prob > threshold
 
+def filter_missunderstand(data, model, args):
+    p = model.predict_proba(data)
+    listener_perception = np.argmax(p, axis=1)
+    speaker_perception = data["Z"].argmax(dim = "k").values
+    return listener_perception == speaker_perception
+
 
 
 if filter_name == "high_entropy":
     filter_func = filter_high_entropy
 if filter_name == "low_max_prob":
     filter_func = filter_low_max_prob
+if filter_name == "missunderstand":
+    filter_func = filter_missunderstand
 if filter_name == "none":
     filter_func = lambda x, y, z: [True]
 # サンプルを生成

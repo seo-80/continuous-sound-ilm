@@ -111,31 +111,44 @@ def dict_equal(d1, d2):
 print(config)
 matched_data = []   
 if folder_name:
-    X = np.load(DATA_DIR+folder_name+"/data.npy")
-    params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
-    retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
-    metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
-    matched_data.append((X, params, retry_counts, folder_name, metrics_data))
-    print("load", folder_name)
-else:
-    for folder_name in folder_names:
-        if os.path.exists(DATA_DIR+folder_name+"/config.json"):
-            with open(DATA_DIR+folder_name+"/config.json") as f:
-                temp_config = json.load(f)
-            if dict_equal(temp_config, config):
-                X = np.load(DATA_DIR+folder_name+"/data.npy")
-                params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
-                retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
-                metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
-                matched_data.append((X, params, retry_counts, folder_name, metrics_data))
-                print("load", folder_name)
+    folder_names = [folder_name]
+
+for folder_name in folder_names:
+    if os.path.exists(DATA_DIR+folder_name+"/config.json"):
+        with open(DATA_DIR+folder_name+"/config.json") as f:
+            temp_config = json.load(f)
+        X = np.load(DATA_DIR+folder_name+"/data.npy")
+        Z = np.load(DATA_DIR+folder_name+"/Z.npy")
+        C = np.load(DATA_DIR+folder_name+"/context.npy")
+        params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
+        retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
+        metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
+        matched_data.append({
+            "X": X,
+            "Z": Z,
+            "C": C,
+            "params": params,
+            "retry_counts": retry_counts,
+            "folder_name": folder_name,
+            "metrics_data": metrics_data
+        })
+        print("load", folder_name)
             
     
 if "X" not in locals():
     print("Not Found")
     exit()
 
-for X, params, retry_counts, folder_name, metrics in matched_data:
+for data in matched_data:
+    X = data["X"]
+    Z = data["Z"]
+    C = data["C"]
+    params = data["params"]
+    retry_counts = data["retry_counts"]
+    folder_name = data["folder_name"]
+    metrics_data = data["metrics_data"]
+    iter = params["m"].shape[0]
+
     # plot metrics
     ## plot expected_mahalanobis mean
     fig, axs = plt.subplots()
@@ -166,18 +179,19 @@ for X, params, retry_counts, folder_name, metrics in matched_data:
     cbar = fig.colorbar(im)
     cbar.set_label('Expected Overlap')
     plt.savefig(os.path.join(DATA_DIR, folder_name,"expected_overlap_mean.png"))
-    
+
 
 
     fig, axs = plt.subplots()
     # Create a colormap
     colors = plt.cm.viridis(np.linspace(0, 1, iter))
+    cluster_colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
 
     # Plot the trajectory of params["m"] in 2D space with color gradient
     for k in range(K):
         for i in range(1, iter):
             axs.plot(params["m"][i-1:i+1, k, 0], params["m"][i-1:i+1, k, 1], color=colors[i], alpha=0.5)
-        axs.scatter(params["m"][-1, k, 0], params["m"][-1, k, 1], color='b', marker='o', s=10, label=f"Cluster {k+1}")
+        axs.scatter(params["m"][-1, k, 0], params["m"][-1, k, 1], marker='o', s=10, label=f"Cluster {k+1}", c=cluster_colors[k])
 
     axs.set_xlim(-10, 10)
     axs.set_ylim(-10, 10)
@@ -241,5 +255,77 @@ for X, params, retry_counts, folder_name, metrics in matched_data:
     ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
     ani.save(DATA_DIR+folder_name+"/animation.gif", writer="pillow")
     # plt.show()
+    fig, axs = plt.subplots()
+    def update(i):
+        axs.clear()
+        artists = []
+
+        fake_z = np.argmax(Z[i], axis=1)
+        colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        for z in range(K):
+            X_with_z = X[i][fake_z == z]
+            scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=5, alpha=0.5)
+        artists.append(scatter)
+
+        for k in range(4):
+            mean = params["m"][i, k]
+            matrix = params["beta"][i, k] * params["W"][i, k, :, :]
+            covar = np.linalg.inv(matrix)
+            axs.set_xlim(-10, 10)
+            axs.set_ylim(-10, 10)
+            x, y = np.meshgrid(np.linspace(-10, 10, 100), np.linspace(-10, 10, 100))
+            xy = np.column_stack([x.flat, y.flat])
+            z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
+
+            rv = multivariate_normal(mean, covar)
+            level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+            contour = axs.contour(x, y, z, alpha=0.5, levels=[level])
+            artists.append(contour)
+        axs.legend(['Cluster 1', 'Cluster 2', 'Cluster 3', 'Cluster 4'], loc='upper right')
+        # axs.set_title(f"iteration {i}")
+
+        # plt.tight_layout()
+
+        return artists
+
+    ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
+    ani.save(DATA_DIR+folder_name+"/animation_colored_with_z.gif", writer="pillow")
+    fig, axs = plt.subplots()
+    def update(i):
+        axs.clear()
+        artists = []
+
+        fake_z = np.argmax(C[i], axis=1)
+        print(fake_z.shape)
+        colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        for z in range(K):
+            X_with_z = X[i][fake_z == z]
+            scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=5, alpha=0.5)
+        artists.append(scatter)
+
+        for k in range(4):
+            mean = params["m"][i, k]
+            matrix = params["beta"][i, k] * params["W"][i, k, :, :]
+            covar = np.linalg.inv(matrix)
+            axs.set_xlim(-10, 10)
+            axs.set_ylim(-10, 10)
+            x, y = np.meshgrid(np.linspace(-10, 10, 100), np.linspace(-10, 10, 100))
+            xy = np.column_stack([x.flat, y.flat])
+            z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
+
+            rv = multivariate_normal(mean, covar)
+            level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+            contour = axs.contour(x, y, z, alpha=0.5, levels=[level])
+            artists.append(contour)
+        axs.legend(['Cluster 1', 'Cluster 2', 'Cluster 3', 'Cluster 4'], loc='upper right')
+
+        # axs.set_title(f"iteration {i}")
+
+        # plt.tight_layout()
+
+        return artists
+
+    ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
+    ani.save(DATA_DIR+folder_name+"/animation_colored_with_C.gif", writer="pillow")
 if input('open directory? y/n') == 'y':
     os.system(f'open {DATA_DIR+folder_name}')
