@@ -77,6 +77,9 @@ c_alpha = np.array(
     [[2, 2, 1/16, 1/16],
     [1/16, 1/16, 2, 2]]
 )
+# c_alpha = np.array(
+#     [0.1, 0.1, 0.1, 0.1]
+# )
     # if c_alpha is None, agent inferes alpha and use it to generate data
 # c_dirichlet_weight = [1, 1, 1, 1]
 beta0 = 1.0
@@ -87,7 +90,7 @@ m0 = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
 # m0 = np.array([[0, 0], [-5, 5], [5, -5], [-5, -5]])
 W0 = np.eye(D)*0.02
 
-iter = 10
+iter = 100
 agent = "BayesianGaussianMixtureModelWithContext"
 # agent = "BayesianGaussianMixtureModel"
 config = {
@@ -107,7 +110,7 @@ config = {
     "iter": iter,   
     "filter_func": filter_name,
     "filter_args": {
-        "threshold": 1-1/16
+        "threshold": 1/16
     }
 }
 
@@ -197,6 +200,7 @@ for i in tqdm.tqdm(range(iter)):
     X.append(child_agent.X)
     if agent == "BayesianGaussianMixtureModelWithContext":
         C.append(child_agent.C)
+        Z.append(child_agent.Z)
     # Z.append(child_agent.Z)
     params["alpha"][i] = child_agent.alpha
     params["beta"][i] = child_agent.beta

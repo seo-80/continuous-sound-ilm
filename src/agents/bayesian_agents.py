@@ -29,7 +29,7 @@ def multi_student_t(X, m, L, nu):
 
 
 class BayesianGaussianMixtureModel:
-
+    # todo : add pi_mixture_ratio, c_alpha, mixture_pi
     def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None):
         self.K = K
         self.D = D
@@ -396,8 +396,8 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         ----------
         X : 2D numpy array
             2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        C : 1D numpy array
-            1D numpy array representing context data, where C[n] represents the context of n-th point in X.
+        C : 2D numpy array
+            2D numpy array representing context data, where C[n, k] represents the k-th element of n-th point in C.
         max_iter : int
             The maximum number of iteration
         tol : float
@@ -454,8 +454,8 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         ----------
         X : 2D numpy array
             2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        C : 1D numpy array
-            1D numpy array representing context data, where C[n] represents the context of n-th point in X.
+        C : 2D numpy array
+            2D numpy array representing context data, where C[n, k] represents the k-th element of n-th point in C.
         Returns
         ----------
         r : 2D numpy array
@@ -533,17 +533,17 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 z_new = []
                 C_new = []
                 for i in range(n_samples):
-                    alpha_norm = self.c_alpha[comopnent_idx[i]]/np.sum(self.c_alpha[comopnent_idx[i]])
-                    z_new.append(np.random.multinomial(1, alpha_norm, size=1))
-                    C_new.append(np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1))
+                    C_new_temp = np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1)[0]
+                    C_new.append(C_new_temp)
+                    z_new.append(np.random.multinomial(1, C_new_temp, size=1))
                 z_new = np.vstack(z_new)
                 C_new = np.vstack(C_new)
                 # for i in range(n_samples):
                 #     print(z_new[i], C_new[i],comopnent_idx[i])
             else:
-                alpha_norm = self.c_alpha/np.sum(self.c_alpha)
-                z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
-                C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
+                C_new_temp = np.random.dirichlet(self.c_alpha, size=n_samples)
+                z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1) for i in range(n_samples)])
+                C_new = C_new_temp
         X_new = np.zeros((n_samples, self.D))
         
         for k in range(self.K):
@@ -554,9 +554,9 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     np.linalg.inv(self.beta[k] * self.W[k]),
                     size=len(idx)
                 )
-            print('z:',z_new)
-            print('idx:',idx)
-            print('X:',X_new)
+            # print('z:',z_new)
+            # print('idx:',idx)
+            # print('X:',X_new)
         ret_ds = xr.Dataset(
             {
                 'X': (['n', 'd'], X_new),
@@ -601,8 +601,8 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         ----------
         X : 2D numpy array
             2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        C : 1D numpy array
-            1D numpy array representing context data, where C[n] represents the context of n-th point in X.
+        C : 2D numpy array
+            2D numpy array representing context data, where C[n, k] represents the k-th element of n-th point in C.
 
         Returns
         ----------

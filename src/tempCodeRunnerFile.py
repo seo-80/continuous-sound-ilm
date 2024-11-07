@@ -1,6 +1,10 @@
 import numpy as np
 
-arry = np.zeros((10, 10))
-idx = np.array([1,2])
-arry[idx] = np.ones((2,10))
-print(arry)
+array1 = np.ones((5, 4, 3))
+array2 = np.ones((3,))*2
+array3 = np.ones((4, 3))*3
+
+ret = array1 * array2 * array3
+print(ret)
+print(ret.shape) 
+ # element-wise multiplication

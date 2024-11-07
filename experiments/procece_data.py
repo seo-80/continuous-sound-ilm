@@ -36,12 +36,23 @@ for folder_name in folder_names:
 
         with open(os.path.join(DATA_DIR, "config.json"), "r") as f:
             config = json.load(f)
-        n_components = params['W'].shape[1]
-        n_simulations = params['W'].shape[0]
-        n_dir_components = len(config['c_alpha'])
-        dir_weights = config['weights'] if 'weights' in config else np.ones(n_dir_components) / n_dir_components
-        evaluator = metrics.MixtureDirichletGaussianWishartEvaluator(n_components)
-        results = []
+        if isinstance(config['c_alpha'][0], list):
+                
+            n_components = params['W'].shape[1]
+            n_simulations = params['W'].shape[0]
+            n_dir_components = len(config['c_alpha'])
+            dir_weights = config['weights'] if 'weights' in config else np.ones(n_dir_components) / n_dir_components
+            evaluator = metrics.MixtureDirichletGaussianWishartEvaluator(n_components)
+            results = []
+    
+        else:
+            n_components = params['W'].shape[1]
+            n_simulations = params['W'].shape[0]
+            n_dir_components = 1
+            dir_weights = np.array([1])
+            evaluator = metrics.MixtureDirichletGaussianWishartEvaluator(n_components)
+            results = []
+            config['c_alpha'] = [config['c_alpha']]
         
         for si in range(n_simulations):
             NIW_params = [
