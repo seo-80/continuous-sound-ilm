@@ -66,10 +66,17 @@ def filter_missunderstand(data, model, args):
 
 if filter_name == "high_entropy":
     filter_func = filter_high_entropy
+    filter_args = {
+        "threshold": 1/16
+    }
 if filter_name == "low_max_prob":
     filter_func = filter_low_max_prob
+    filter_args = {
+        "threshold": 1-1/16
+    }
 if filter_name == "missunderstand":
     filter_func = filter_missunderstand
+    filter_args = {}
 if filter_name == "none":
     filter_func = lambda x, y, z: [True]
 # サンプルを生成
@@ -209,7 +216,7 @@ for i in tqdm.tqdm(range(iter)):
     X.append(child_agent.X)
     if agent == "BayesianGaussianMixtureModelWithContext":
         C.append(child_agent.C)
-        Z.append(child_agent.Z)
+    Z.append(child_agent.Z)
     # Z.append(child_agent.Z)
     params["alpha"][i] = child_agent.alpha
     params["beta"][i] = child_agent.beta
