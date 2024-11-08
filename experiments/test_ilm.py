@@ -26,13 +26,13 @@ D = 2  # 次元数
 N = 1000  # サンプル数
 filter_name = "high_entropy"    
 # filter_name = "low_max_prob"
-filter_name = "missunderstand"
+# filter_name = "missunderstand"
 # filter_name = "none"    
 
 # 真の混合ガウス分布のパラメータ
-true_alpha = np.array([1/true_K, 1/true_K, 1/true_K, 1/true_K])
-true_means = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
-# true_means = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
+true_alpha = np.array([1/true_K for _ in range(true_K)])
+true_means = np.array([[5*np.cos(2*np.pi*i/true_K), 5*np.sin(2*np.pi*i/true_K)] for i in range(true_K)])
+# true_means = np.array([[0, 0], for _ in range(true_K)])
 
 true_covars = np.array([[[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
@@ -93,17 +93,16 @@ c_alpha = np.array(
     [[2, 2, 1/16, 1/16],
     [1/16, 1/16, 2, 2]]
 )
-# c_alpha = np.array(
-#     [0.1, 0.1, 0.1, 0.1]
-# )
+c_alpha = np.array(
+    [1/K for _ in range(K)]
+)
     # if c_alpha is None, agent inferes alpha and use it to generate data
 # c_dirichlet_weight = [1, 1, 1, 1]
 beta0 = 1.0
 nu0 = D + 2.0
 m0 = np.zeros(D)
-m0 = np.array([[5, 5], [-5, 5], [5, -5], [-5, -5]])
-# m0 = np.array([[0, 0], [-0, 0], [0, -0], [-0, -0]])
-# m0 = np.array([[0, 0], [-5, 5], [5, -5], [-5, -5]])
+m0 = np.array([[5*np.cos(2*np.pi*i/K), 5*np.sin(2*np.pi*i/K)] for i in range(K)])
+m0 = np.array([[0, 0] for i in range(K)])
 W0 = np.eye(D)*0.02
 
 iter = 100

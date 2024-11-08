@@ -43,12 +43,14 @@ class BayesianGaussianMixtureModel:
             self.c_alpha = c_alpha * np.ones(K)
         elif isinstance(c_alpha, np.ndarray) :
             self.c_alpha = c_alpha
-            if c_alpha.shape != (K,):
+            if c_alpha.shape == (K,):
+                self.mixture_pi = False
+            elif c_alpha.shape[1] == K:
                 self.mixture_pi = True
                 self.comopnent_num = c_alpha.shape[0]
                 self.pi_mixture_ratio = pi_mixture_ratio if pi_mixture_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num
             else:
-                self.mixture_pi = False
+                raise ValueError("The shape of c_alpha is invalid.")
         else:
             raise ValueError("The shape of c_alpha is invalid.")
         self.beta0 = beta0
@@ -542,10 +544,9 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 #     print(z_new[i], C_new[i],comopnent_idx[i])
             else:
                 C_new_temp = np.random.dirichlet(self.c_alpha, size=n_samples)
-                z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1) for i in range(n_samples)])
+                z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1)[0] for i in range(n_samples)])
                 C_new = C_new_temp
         X_new = np.zeros((n_samples, self.D))
-        
         for k in range(self.K):
             idx = np.where(z_new[:, k] == 1)[0]
             if len(idx) > 0:
