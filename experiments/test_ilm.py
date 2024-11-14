@@ -24,15 +24,19 @@ K = 4  # 混合成分数
 true_K = 4
 D = 2  # 次元数
 N = 1000  # サンプル数
-filter_name = "high_entropy"    
-# filter_name = "low_max_prob"
-# filter_name = "missunderstand"
-# filter_name = "none"    
+# fit_filter_name = "high_entropy"    
+# fit_filter_name = "low_max_prob"
+# fit_filter_name = "missunderstand"
+fit_filter_name = "none"    
+generate_filter_name = "none"
+generate_filter_name = "high_entropy"
+# generate_filter_name = "low_max_prob"
+# generate_filter_name = "missunderstand"
 
 # 真の混合ガウス分布のパラメータ
 true_alpha = np.array([1/true_K for _ in range(true_K)])
 true_means = np.array([[5*np.cos(2*np.pi*i/true_K), 5*np.sin(2*np.pi*i/true_K)] for i in range(true_K)])
-# true_means = np.array([[0, 0], for _ in range(true_K)])
+true_means = np.array([[0, 0] for _ in range(true_K)])
 
 true_covars = np.array([[[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
@@ -42,43 +46,36 @@ true_covars = np.array([np.eye(D)*1 for _ in range(true_K)])
 
 
 
-def filter_high_entropy(data, model, args):
-    threshold = args["threshold"]
-    p = model.predict_proba(data)
-    p = np.clip(p, 1e-10, 1-1e-10)
-    entropy = -np.sum(p * np.log(p), axis=1)
-    # print(p, entropy)
-    return entropy < threshold
-
-def filter_low_max_prob(data, model, args):
-    threshold = args["threshold"]
-    p = model.predict_proba(data)
-    max_prob = np.max(p, axis=1)
-    return max_prob > threshold
-
-def filter_missunderstand(data, model, args):
-    p = model.predict_proba(data)
-    listener_perception = np.argmax(p, axis=1)
-    speaker_perception = data["Z"].argmax(dim = "k").values
-    return listener_perception == speaker_perception
 
 
 
-if filter_name == "high_entropy":
-    filter_func = filter_high_entropy
-    filter_args = {
+
+if fit_filter_name == "high_entropy":
+    fit_filter_args = {
         "threshold": 1/16
     }
-if filter_name == "low_max_prob":
-    filter_func = filter_low_max_prob
-    filter_args = {
+if fit_filter_name == "low_max_prob":
+    fit_filter_args = {
         "threshold": 1-1/16
     }
-if filter_name == "missunderstand":
-    filter_func = filter_missunderstand
-    filter_args = {}
-if filter_name == "none":
-    filter_func = lambda x, y, z: [True]
+if fit_filter_name == "missunderstand":
+    fit_filter_args = {}
+if fit_filter_name == "none":
+    fit_filter_args = {}
+
+if generate_filter_name == "high_entropy":
+    generate_filter_args = {
+        "threshold": 1/16
+    }
+if generate_filter_name == "low_max_prob":
+    generate_filter_args = {
+        "threshold": 1-1/16
+    }
+if generate_filter_name == "missunderstand":
+    generate_filter_args = {}
+if generate_filter_name == "none":
+    generate_filter_args = {}
+
 # サンプルを生成
 X_0 = np.zeros((N, D))
 C_0 = np.random.dirichlet(true_alpha, size=N)
@@ -123,10 +120,10 @@ config = {
     "m0": m0.tolist(),
     "W0": W0.tolist(),
     "iter": iter,   
-    "filter_func": filter_name,
-    "filter_args": {
-        "threshold": 1/16
-    }
+    "fit_filter_func": fit_filter_name,
+    "fit_filter_args": fit_filter_args,
+    "generate_filter_func": generate_filter_name,
+    "generate_filter_args": generate_filter_args,
 }
 
 
@@ -134,7 +131,7 @@ config = {
 
 # モデルをフィッティング
 if agent == "BayesianGaussianMixtureModelWithContext":
-    parent_agent = BayesianGaussianMixtureModelWithContext(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
+    parent_agent = BayesianGaussianMixtureModelWithContext(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, fit_filter="none", fit_filter_args=fit_filter_args, generate_filter='none', generate_filter_args=generate_filter_args)
     parent_agent.fit(xr.Dataset({
         "X": (["n", "d"], X_0),
         "C": (["n", "k"], C_0),
@@ -165,52 +162,11 @@ X.append((X_0))
 Z.append((z_0))
 for i in tqdm.tqdm(range(iter)):
     if agent == "BayesianGaussianMixtureModelWithContext":
-        child_agent = BayesianGaussianMixtureModelWithContext(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
+        child_agent = BayesianGaussianMixtureModelWithContext(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, fit_filter=fit_filter_name, fit_filter_args=fit_filter_args, generate_filter=generate_filter_name, generate_filter_args=generate_filter_args)
     elif agent == "BayesianGaussianMixtureModel":
         child_agent = BayesianGaussianMixtureModel(K, D, alpha0, beta0, nu0, m0, W0, c_alpha)
     retry_count = []
-    if filter_name != "none":
-        if agent == "BayesianGaussianMixtureModelWithContext":
-            data_stock = parent_agent.generate(2*N)
-            count = 0
-            for di in range(N):
-                retry = 0
-                while True:
-                    if count >= 2*N:
-                        data_stock = parent_agent.generate(2*N)
-                        count = 0
-                    data = data_stock.sel(n=count)
-                    count += 1
-                    if filter_func(data, child_agent, config['filter_args'])[0]:
-                        # print(data)
-                        child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
-                        break   
-                    retry += 1
-                retry_count.append(retry)
-
-        elif agent == "BayesianGaussianMixtureModel":
-            for di in range(N):
-                data_stock = parent_agent.generate(N)
-                count = 0
-                retry = 0
-                while True:
-                    if count >= N:
-                        data_stock = parent_agent.generate(N)
-                        count = 0
-                    data = data_stock.sel(n=count)
-                    if filter_func(data, child_agent, config['filter_args'])[0]:
-                        child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
-                        break
-                    retry += 1
-                    count += 1
-                retry_count.append(retry)
-            print(retry_count)
-    else:
-        data = parent_agent.generate(N)
-        if isinstance(data, tuple):
-            child_agent.fit(*data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
-        else:
-            child_agent.fit(data, max_iter=1000, tol=1e-6, random_state=0, disp_message=False)
+    child_agent.fit_from_agent(parent_agent, N=N)
     retry_counts.append(retry_count)
     X.append(child_agent.X)
     if agent == "BayesianGaussianMixtureModelWithContext":

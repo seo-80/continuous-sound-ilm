@@ -22,15 +22,40 @@ def multi_student_t(X, m, L, nu):
 
     # Convert the log result back to a regular number
     result = np.exp(log_result)
-        # print("Part 5:", part5)
+
     
     return result
     # return gamma((nu + D)/2) / (gamma(nu/2) * np.power(nu*np.pi, D/2) * np.sqrt(np.linalg.det(L))) * np.power(1 + 1/nu * np.einsum("nj,jk,nk->n", diff, np.linalg.inv(L), diff), -(nu+D)/2)
 
+def filter_high_entropy(data, model, args):
+    threshold = args["threshold"]
+    p = model.predict_proba(data)
+    p = np.clip(p, 1e-10, 1-1e-10)
+    entropy = -np.sum(p * np.log(p), axis=1)
+    return entropy < threshold
+
+def filter_low_max_prob(data, model, args):
+    threshold = args["threshold"]
+    p = model.predict_proba(data)
+    max_prob = np.max(p, axis=1)
+    return max_prob > threshold
+
+def filter_missunderstand(data, model, args):
+    p = model.predict_proba(data)
+    listener_perception = np.argmax(p, axis=1)
+    speaker_perception = data["Z"].argmax(dim = "k").values
+    return listener_perception == speaker_perception
+
+FILTER_DICT = {
+    "high_entropy": filter_high_entropy,
+    "low_max_prob": filter_low_max_prob,
+    "missunderstand": filter_missunderstand,
+    "none": None
+}
 
 class BayesianGaussianMixtureModel:
     # todo : add pi_mixture_ratio, c_alpha, mixture_pi
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None):
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None):
         self.K = K
         self.D = D
         if isinstance(alpha0, (int, float, complex)):
@@ -72,6 +97,25 @@ class BayesianGaussianMixtureModel:
         self.lower_bound = None
         self.X = None
         self._init_params()
+        if isinstance(fit_filter, str):
+            self.fit_filter = FILTER_DICT[fit_filter]
+        elif fit_filter is None or fit_filter == "none":
+            self.fit_filter = None
+        elif callable(fit_filter):
+            self.fit_filter = fit_filter
+        else:
+            raise ValueError("fit_filter must be a string, None, or a function")
+        
+        if isinstance(generate_filter, str):
+            self.generate_filter = FILTER_DICT[generate_filter]
+        elif generate_filter is None or fit_filter == "none":
+            self.generate_filter = None
+        elif callable(generate_filter):
+            self.generate_filter = generate_filter
+        else:
+            raise ValueError("generate_filter must be a string, None, or a function")
+        self.fit_filter_args = fit_filter_args
+        self.generate_filter_args = generate_filter_args
 
     def _init_params(self, X=None, random_state=None):
         '''
@@ -96,11 +140,7 @@ class BayesianGaussianMixtureModel:
         self.nu = (self.nu0 + N / self.K) * np.ones(self.K)
         self.m = self.m0 
         self.W = np.tile(self.W0, (self.K, 1, 1))
-        # print('alpha',self.alpha)
-        # print('beta',self.beta)
-        # print('nu',self.nu)
-        # print('m',self.m)
-        # print('W',self.W)
+
 
     def _e_like_step(self, X):
         '''
@@ -208,6 +248,8 @@ class BayesianGaussianMixtureModel:
         disp_message : Boolean
             Whether to show the message on the result.
         '''
+        if self.fit_filter is not None and not self.fit_filter(data, self, self.fit_filter_args):
+            return False
         if self.X is None:
             self.X = data.X.values
             if len(self.X.shape) == 1:
@@ -236,6 +278,8 @@ class BayesianGaussianMixtureModel:
             print(f"convergend : {i < max_iter}")
             print(f"lower bound : {lower_bound}")
             print(f"Change in the variational lower bound : {lower_bound - lower_bound_prev}")
+        
+        return True
 
     def fit_from_agent(self, source_agent, N, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
         '''
@@ -385,8 +429,8 @@ class BayesianGaussianMixtureModel:
 
 
 class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None):
-        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio)
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None):
+        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args)
         self.C = None
         self.Z = None
 
@@ -410,6 +454,8 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         disp_message : Boolean
             Whether to show the message on the result.
         '''
+        if self.fit_filter is not None and not self.fit_filter(data, self, self.fit_filter_args):
+            return False
         if self.X is None and self.C is None:
             self.X = data.X.values
             self.C = data.C.values
@@ -437,17 +483,51 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 break
 
         self.lower_bound = lower_bound
-        # for i in range(len(self.X)):
-        #     print('x:',self.X[i])
-        #     print('c:',self.C[i])
-        #     print('z:',self.Z[i])
-        #     print('---------')
+
 
         if disp_message:
             print(f"n_iter : {i}")
             print(f"convergend : {i < max_iter}")
             print(f"lower bound : {lower_bound}")
             print(f"Change in the variational lower bound : {lower_bound - lower_bound_prev}")
+        return True
+
+    def fit_from_agent(self, source_agent, N, max_iter=1000, tol=0.0001, random_state=None, disp_message=False):
+        '''
+        Method for fitting the model based on the source agent.
+
+        Parameters
+        ----------
+        source_agent : BayesianGaussianMixtureModel
+            An instance of BayesianGaussianMixtureModel, which is used as the source of the training data.
+        N : int
+            The number of samples to be generated.
+        max_iter : int
+            The maximum number of iteration
+        tol : float
+            The criterion for juding the convergence. 
+            When the change of lower bound becomes smaller than tol, the iteration is stopped.
+        random_state : int
+            An integer specifying the random number seed for random initialization
+        disp_message : Boolean
+            Whether to show the message on the result.
+        '''
+        data = source_agent.generate(N)
+        if self.fit_filter is None:
+            self.fit(data, max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message)
+        else:
+            count = -1
+            for i in range(N):
+                while True:
+                    count += 1
+                    if count >= N:
+                        count = 0
+                        data = source_agent.generate(N)
+
+                    if self.fit(data.sel(n=count), max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message):
+                        break
+
+
     def _e_like_step(self, X, C):
         '''
         Method for calculating the array corresponding to responsibility.
@@ -509,7 +589,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             S * np.reshape(n_samples_in_component, (self.K, 1, 1)) + \
             np.reshape( self.beta0 * n_samples_in_component / (self.beta0 + n_samples_in_component), (self.K, 1, 1)) * np.einsum("ki,kj->kij",diff2,diff2) 
         self.W = np.linalg.inv(Winv)
-    def generate(self, n_samples):
+    def generate_(self, n_samples):
         '''
         Method for generating new data points based on the estimated model parameters.
 
@@ -525,48 +605,155 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         C_new : 1D numpy array
             A numpy array with shape (n_samples, ), where C_new[n] is the context of the n-th generated sample.
         '''
-        if self.c_alpha is None:
-            alpha_norm = self.alpha / self.alpha.sum()
-            z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
-            C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
-        else:
-            if self.mixture_pi:
-                comopnent_idx = np.random.choice(self.comopnent_num, size=n_samples, p=self.pi_mixture_ratio)
-                z_new = []
-                C_new = []
-                for i in range(n_samples):
-                    C_new_temp = np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1)[0]
-                    C_new.append(C_new_temp)
-                    z_new.append(np.random.multinomial(1, C_new_temp, size=1))
-                z_new = np.vstack(z_new)
-                C_new = np.vstack(C_new)
-                # for i in range(n_samples):
-                #     print(z_new[i], C_new[i],comopnent_idx[i])
-            else:
-                C_new_temp = np.random.dirichlet(self.c_alpha, size=n_samples)
-                z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1)[0] for i in range(n_samples)])
-                C_new = C_new_temp
-        X_new = np.zeros((n_samples, self.D))
-        for k in range(self.K):
-            idx = np.where(z_new[:, k] == 1)[0]
-            if len(idx) > 0:
-                X_new[idx] = np.random.multivariate_normal(
-                    self.m[k], 
-                    np.linalg.inv(self.beta[k] * self.W[k]),
-                    size=len(idx)
-                )
-            # print('z:',z_new)
-            # print('idx:',idx)
-            # print('X:',X_new)
         ret_ds = xr.Dataset(
             {
-                'X': (['n', 'd'], X_new),
-                'C': (['n', 'k'], C_new),
-                'Z': (['n', 'k'], z_new),
+                'X': (['n', 'd'], np.zeros((n_samples, self.D))),
+                'C': (['n', 'k'], np.zeros((n_samples, self.K))),
+                'Z': (['n', 'k'], np.zeros((n_samples, self.K))),
             },
             coords={'n': np.arange(n_samples), 'd': np.arange(self.D), 'k': np.arange(self.K)}
         )
-        return ret_ds                                                                               
+        n_filtered_samples = 0
+        while True:
+            if self.c_alpha is None:
+                alpha_norm = self.alpha / self.alpha.sum()
+                z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
+                C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
+            else:
+                if self.mixture_pi:
+                    comopnent_idx = np.random.choice(self.comopnent_num, size=n_samples, p=self.pi_mixture_ratio)
+                    z_new = []
+                    C_new = []
+                    for i in range(n_samples):
+                        C_new_temp = np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1)[0]
+                        C_new.append(C_new_temp)
+                        z_new.append(np.random.multinomial(1, C_new_temp, size=1))
+                    z_new = np.vstack(z_new)
+                    C_new = np.vstack(C_new)
+                else:
+                    C_new_temp = np.random.dirichlet(self.c_alpha, size=n_samples)
+                    z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1)[0] for i in range(n_samples)])
+                    C_new = C_new_temp
+            X_new = np.zeros((n_samples, self.D))
+            for k in range(self.K):
+                idx = np.where(z_new[:, k] == 1)[0]
+                if len(idx) > 0:
+                    X_new[idx] = np.random.multivariate_normal(
+                        self.m[k], 
+                        np.linalg.inv(self.beta[k] * self.W[k]),
+                        size=len(idx)
+                    )
+            temp_ret_ds = xr.Dataset(
+                {
+                    'X': (['n', 'd'], X_new),
+                    'C': (['n', 'k'], C_new),
+                    'Z': (['n', 'k'], z_new),
+                },
+                coords={'n': np.arange(n_samples), 'd': np.arange(self.D), 'k': np.arange(self.K)}
+            )
+            if not self.generate_filter is None:
+                temp_ret_ds = temp_ret_ds[self.generate_filter(temp_ret_ds, self, self.generate_filter_args)]
+            temp_n_samples = len(temp_ret_ds.X)
+            if temp_n_samples + n_filtered_samples > n_samples:
+                temp_n_samples = n_samples - n_filtered_samples
+                ret_ds = ret_ds.isel(n=slice(0, temp_n_samples))
+            ret_ds[n_filtered_samples:n_filtered_samples+temp_n_samples] = temp_ret_ds
+            n_filtered_samples += temp_n_samples
+            if n_filtered_samples == n_samples:
+                return ret_ds[:n_samples]
+    def generate(self, n_samples):
+        # 結果を格納するリスト
+        collected_datasets = []
+        n_filtered_samples = 0
+        
+        while n_filtered_samples < n_samples:
+            # サンプル生成のバッチサイズを決定
+            batch_size = min(n_samples - n_filtered_samples, n_samples)
+            
+            # Z（潜在変数）とC（混合係数）の生成
+            if self.c_alpha is None:
+                alpha_norm = self.alpha / self.alpha.sum()
+                z_new = np.random.multinomial(1, alpha_norm, size=batch_size)
+                C_new = np.random.dirichlet(self.c_alpha, size=batch_size)
+            else:
+                if self.mixture_pi:
+                    comopnent_idx = np.random.choice(
+                        self.comopnent_num, 
+                        size=batch_size, 
+                        p=self.pi_mixture_ratio
+                    )
+                    z_new = []
+                    C_new = []
+                    for i in range(batch_size):
+                        C_new_temp = np.random.dirichlet(
+                            self.c_alpha[comopnent_idx[i]], 
+                            size=1
+                        )[0]
+                        C_new.append(C_new_temp)
+                        z_new.append(np.random.multinomial(1, C_new_temp, size=1))
+                    z_new = np.vstack(z_new)
+                    C_new = np.vstack(C_new)
+                else:
+                    C_new_temp = np.random.dirichlet(self.c_alpha, size=batch_size)
+                    z_new = np.array([
+                        np.random.multinomial(1, C_new_temp[i], size=1)[0] 
+                        for i in range(batch_size)
+                    ])
+                    C_new = C_new_temp
+            
+            # X（観測データ）の生成
+            X_new = np.zeros((batch_size, self.D))
+            for k in range(self.K):
+                idx = np.where(z_new[:, k] == 1)[0]
+                if len(idx) > 0:
+                    X_new[idx] = np.random.multivariate_normal(
+                        self.m[k],
+                        np.linalg.inv(self.beta[k] * self.W[k]),
+                        size=len(idx)
+                    )
+            
+            # バッチデータセットの作成
+            temp_ret_ds = xr.Dataset(
+                {
+                    'X': (['n', 'd'], X_new),
+                    'C': (['n', 'k'], C_new),
+                    'Z': (['n', 'k'], z_new),
+                },
+                coords={
+                    'n': np.arange(n_filtered_samples, n_filtered_samples + batch_size),
+                    'd': np.arange(self.D),
+                    'k': np.arange(self.K)
+                }
+            )
+            
+            # フィルタリング処理
+            if self.generate_filter is not None:
+                filtered_index = self.generate_filter(temp_ret_ds, self, self.generate_filter_args)
+                temp_ret_ds = temp_ret_ds.isel(n=filtered_index)
+            
+            # 条件を満たすサンプルを追加
+            if len(temp_ret_ds.X) > 0:
+                temp_n_samples = min(len(temp_ret_ds.X), n_samples - n_filtered_samples)
+                if temp_n_samples > 0:
+                    collected_datasets.append(temp_ret_ds.isel(n=slice(0, temp_n_samples)))
+                    n_filtered_samples += temp_n_samples
+        
+        # すべてのデータセットを結合
+        if collected_datasets:
+            final_ds = xr.concat(collected_datasets, dim='n')
+            # インデックスを0から始まるように再調整
+            final_ds = final_ds.assign_coords(n=np.arange(len(final_ds.n)))
+            return final_ds
+        else:
+            # 空のデータセットを返す場合
+            return xr.Dataset(
+                {
+                    'X': (['n', 'd'], np.zeros((0, self.D))),
+                    'C': (['n', 'k'], np.zeros((0, self.K))),
+                    'Z': (['n', 'k'], np.zeros((0, self.K))),
+                },
+                coords={'n': [], 'd': np.arange(self.D), 'k': np.arange(self.K)}
+            )                                                      
     
     def predict_proba(self, data):
         '''

@@ -68,9 +68,33 @@ for folder_name in folder_names:
             "folder_name": folder_name,
             "metrics_data": metrics_data
         })
+        # Determine x_lim and y_lim based on X values
+        lim = np.max(np.abs(params["m"]))
+        lim = np.ceil(lim / 10) * 10
+        x_lim = (-lim, lim)
+        y_lim = (-lim, lim)
+
             
 
         iter = params["m"].shape[0]
+
+        # plot mean step difference
+        fig, axs = plt.subplots()
+        # Calculate mean step difference for each cluster
+        print(params["m"].shape)
+        print(np.diff(params["m"], axis=0).shape)
+        print(np.linalg.norm(np.diff(params["m"], axis=0), axis=-1).shape)
+        mean_step_diff = np.mean(np.linalg.norm(np.diff(params["m"], axis=0), axis=-1), axis=0)
+        print(mean_step_diff)
+        # Create bar plot of mean step differences
+        axs.bar(range(1, K+1), mean_step_diff)
+        axs.set_xticks(range(1, K+1))
+        axs.set_xticklabels([f"Cluster {k+1}" for k in range(K)])
+        axs.set_ylabel("Mean Step Difference")
+        axs.set_title("Mean Step Differences by Cluster")
+        plt.tight_layout() 
+        plt.savefig(os.path.join(DATA_DIR, folder_name, "mean_step_diff.png"))
+        plt.close(fig)
 
         # plot metrics
         ## plot expected_mahalanobis mean
@@ -116,8 +140,8 @@ for folder_name in folder_names:
                 axs.plot(params["m"][i-1:i+1, k, 0], params["m"][i-1:i+1, k, 1], color=colors[i], alpha=0.5)
             axs.scatter(params["m"][-1, k, 0], params["m"][-1, k, 1], marker='o', s=10, label=f"Cluster {k+1}", c=cluster_colors[k])
 
-        axs.set_xlim(-10, 10)
-        axs.set_ylim(-10, 10)
+        axs.set_xlim(x_lim)
+        axs.set_ylim(y_lim)
         axs.set_xlabel("X")
         axs.set_ylabel("Y")
         axs.legend()
@@ -127,8 +151,8 @@ for folder_name in folder_names:
         fig, axs = plt.subplots()
         for k in range(K):
             axs.plot(params["m"][:, k, 0], params["m"][:, k, 1], label=f"Cluster {k+1}")
-        axs.set_xlim(-10, 10)
-        axs.set_ylim(-10, 10)
+        axs.set_xlim(x_lim)
+        axs.set_ylim(y_lim)
         plt.savefig(os.path.join(DATA_DIR, folder_name,"trajectory2.png"))
         # plt.show()
 
@@ -151,16 +175,16 @@ for folder_name in folder_names:
             axs.clear()
             artists = []
 
-            scatter = axs.scatter(X[i][:, 0], X[i][:, 1], s=5, alpha=0.5)
+            scatter = axs.scatter(X[i][:, 0], X[i][:, 1], s=2, alpha=0.5)
             artists.append(scatter)
 
             for k in range(K):
                 mean = params["m"][i, k]
                 matrix = params["beta"][i, k] * params["W"][i, k, :, :]
                 covar = np.linalg.inv(matrix)
-                axs.set_xlim(-10, 10)
-                axs.set_ylim(-10, 10)
-                x, y = np.meshgrid(np.linspace(-10, 10, 100), np.linspace(-10, 10, 100))
+                axs.set_xlim(x_lim)
+                axs.set_ylim(y_lim)
+                x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
                 xy = np.column_stack([x.flat, y.flat])
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
@@ -187,16 +211,16 @@ for folder_name in folder_names:
             colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
             for z in range(K):
                 X_with_z = X[i][fake_z == z]
-                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=5, alpha=0.5)
+                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=2, alpha=0.5)
             artists.append(scatter)
 
-            for k in range(4):
+            for k in range(K):
                 mean = params["m"][i, k]
                 matrix = params["beta"][i, k] * params["W"][i, k, :, :]
                 covar = np.linalg.inv(matrix)
-                axs.set_xlim(-10, 10)
-                axs.set_ylim(-10, 10)
-                x, y = np.meshgrid(np.linspace(-10, 10, 100), np.linspace(-10, 10, 100))
+                axs.set_xlim(x_lim)
+                axs.set_ylim(y_lim)
+                x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
                 xy = np.column_stack([x.flat, y.flat])
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
@@ -204,7 +228,7 @@ for folder_name in folder_names:
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
                 contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=colors[k])
                 artists.append(contour)
-            axs.legend(['Cluster 1', 'Cluster 2', 'Cluster 3', 'Cluster 4'], loc='upper right')
+            axs.legend([f'Cluster {i}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
 
             # plt.tight_layout()
@@ -222,16 +246,16 @@ for folder_name in folder_names:
             colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
             for z in range(K):
                 X_with_z = X[i][fake_z == z]
-                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=5, alpha=0.5)
+                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=2, alpha=0.5)
             artists.append(scatter)
 
-            for k in range(4):
+            for k in range(K):
                 mean = params["m"][i, k]
                 matrix = params["beta"][i, k] * params["W"][i, k, :, :]
                 covar = np.linalg.inv(matrix)
-                axs.set_xlim(-10, 10)
-                axs.set_ylim(-10, 10)
-                x, y = np.meshgrid(np.linspace(-10, 10, 100), np.linspace(-10, 10, 100))
+                axs.set_xlim(x_lim)
+                axs.set_ylim(y_lim)
+                x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
                 xy = np.column_stack([x.flat, y.flat])
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
@@ -239,7 +263,7 @@ for folder_name in folder_names:
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
                 contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=colors[k])
                 artists.append(contour)
-            axs.legend(['Cluster 1', 'Cluster 2', 'Cluster 3', 'Cluster 4'], loc='upper right')
+            axs.legend([f'Cluster {i}' for i in range(K)], loc='upper right')
 
             # axs.set_title(f"iteration {i}")
 
@@ -249,3 +273,5 @@ for folder_name in folder_names:
 
         ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
         ani.save(DATA_DIR+folder_name+"/animation_colored_with_C.gif", writer="pillow")
+        
+        plt.cla()
