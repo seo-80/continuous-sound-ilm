@@ -1,8 +1,3 @@
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from scipy.stats import multivariate_normal
 import numpy as np
 import os
 import json
@@ -29,6 +24,50 @@ DATA_DIR = os.path.dirname(__file__) +"/../data/"
 folder_names = os.listdir(DATA_DIR)
 
 # 検索要件
+def all_elements_equal(actual_value, target_value) -> bool:
+    """
+    Check if all elements in the iterable are equal.
+    
+    Parameters:
+    iterable (Iterable): An iterable containing elements to be checked.
+    
+    Returns:
+    bool: True if all elements are equal, False otherwise.
+    """
+    actual_value = np.array(actual_value)
+    if target_value is None:
+        target_value = actual_value[0]
+    return np.all(actual_value == target_value)
+
+def all_elements_not_equal(actual_value, target_value) -> bool:
+    """
+    Check if all elements in the iterable are not equal.
+    
+    Parameters:
+    iterable (Iterable): An iterable containing elements to be checked.
+    
+    Returns:
+    bool: True if all elements are not equal, False otherwise.
+    """
+    return not all_elements_equal(actual_value, target_value)
+
+def is_shape_equal(data, expected_shape) -> bool:
+    """
+    Check if the dimension of the data matches the expected dimension.
+    
+    Parameters:
+    data (Union[np.ndarray, List]): The data to be checked.
+    expected_dim (int): The expected dimension.
+    
+    Returns:
+    bool: True if the dimension matches, False otherwise.
+    """
+    data = np.array(data)
+
+    return data.shape == expected_shape
+
+
+K = 8
 conditions = [
     {
         "path": "agent",
@@ -38,13 +77,23 @@ conditions = [
     {
         "path": "K",
         "operator": "eq",
-        "value": 4
+        "value": K
     },
     # {
     #     "path": "filter_name",
     #     "operator": "eq",
     #     "value": "high_entropy"
     # }
+    {
+        "path": "c_alpha",
+        "operator": all_elements_not_equal,
+        "value": None
+    },
+    {
+        "path": "c_alpha",
+        "operator": is_shape_equal,
+        "value": (K,)
+    }
 
 ]
 
@@ -161,13 +210,17 @@ if __name__ == "__main__":
                 'config': config
             })
     for i in range(len(configs)):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--print_config', action='store_true')
+        print_config = parser.parse_args().print_config
         searcher = JsonSearcher(configs[i]['config'])
-        
         # 検索の実行
         search_result = searcher.search(conditions)
         
         if search_result:
             print(configs[i]['folder_name'])
+            if print_config:
+                print(configs[i]['config'])
         
 
     

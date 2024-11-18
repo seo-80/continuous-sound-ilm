@@ -18,10 +18,11 @@ from src.agents import BayesianGaussianMixtureModel, BayesianGaussianMixtureMode
 
 SAVE_RESULT = True
 DATA_DIR = os.path.dirname(__file__) +"/../data/"
+SAVE_LEARNING_PROCESS = True
 # 合成データを生成
 np.random.seed(0)
-K = 4  # 混合成分数
-true_K = 4
+K = 8  # 混合成分数
+true_K = 8
 D = 2  # 次元数
 N = 1000  # サンプル数
 # fit_filter_name = "high_entropy"    
@@ -31,7 +32,7 @@ fit_filter_name = "none"
 generate_filter_name = "none"
 generate_filter_name = "high_entropy"
 # generate_filter_name = "low_max_prob"
-# generate_filter_name = "missunderstand"
+generate_filter_name = "missunderstand"
 
 # 真の混合ガウス分布のパラメータ
 true_alpha = np.array([1/true_K for _ in range(true_K)])
@@ -42,7 +43,7 @@ true_covars = np.array([[[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],
                         [[1, 0], [0, 1]],])
-true_covars = np.array([np.eye(D)*1 for _ in range(true_K)])
+true_covars = np.array([np.eye(D)*0.2 for _ in range(true_K)])
 
 
 
@@ -95,6 +96,9 @@ c_alpha = np.array(
 )
     # if c_alpha is None, agent inferes alpha and use it to generate data
 # c_dirichlet_weight = [1, 1, 1, 1]
+# c_alpha = np.array(
+#     [1/K if i%2==0 else 1/K/4  for i in range(K)]
+# )
 beta0 = 1.0
 nu0 = D + 2.0
 m0 = np.zeros(D)
@@ -102,7 +106,15 @@ m0 = np.array([[5*np.cos(2*np.pi*i/K), 5*np.sin(2*np.pi*i/K)] for i in range(K)]
 m0 = np.array([[0, 0] for i in range(K)])
 W0 = np.eye(D)*0.02
 
-iter = 100
+#　音象徴性を変える設定
+sound_symbolism_index = [2*i for i in range(K//2)]
+m0 = np.array([[5*np.cos(2*np.pi*i/K), 5*np.sin(2*np.pi*i/K)] for i in range(K)])
+
+beta0 = np.array([0.1 for _ in range(K)])
+beta0[sound_symbolism_index] = 2.0
+
+
+iter = 1000
 agent = "BayesianGaussianMixtureModelWithContext"
 # agent = "BayesianGaussianMixtureModel"
 config = {

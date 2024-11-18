@@ -55,7 +55,8 @@ FILTER_DICT = {
 
 class BayesianGaussianMixtureModel:
     # todo : add pi_mixture_ratio, c_alpha, mixture_pi
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None):
+    # ! this class is not complete
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
         self.K = K
         self.D = D
         if isinstance(alpha0, (int, float, complex)):
@@ -64,6 +65,27 @@ class BayesianGaussianMixtureModel:
             self.alpha0 = alpha0
         else:
             raise ValueError("The shape of alpha0 is invalid.")
+        if isinstance(beta0, (int, float, complex)):
+            self.beta0 = beta0 * np.ones(K)
+        elif beta0.shape == (K,):
+            self.beta0 = beta0
+        else:
+            raise ValueError("The shape of beta0 is invalid.")
+        if isinstance(nu0, (int, float, complex)):
+            self.nu0 = nu0 * np.ones(K)
+        elif nu0.shape == (K,):
+            self.nu0 = nu0
+        else:
+            raise ValueError("The shape of nu0 is invalid.")
+        if m0.shape == (D,):
+            self.m0 = np.tile(m0, (K, 1))
+        elif m0.shape == (K, D):
+            self.m0 = m0
+        else:
+            raise ValueError("The shape of m0 is invalid.")
+        
+        self.W0 = W0
+
         if isinstance(c_alpha, (int, float, complex)):
             self.c_alpha = c_alpha * np.ones(K)
         elif isinstance(c_alpha, np.ndarray) :
@@ -78,15 +100,6 @@ class BayesianGaussianMixtureModel:
                 raise ValueError("The shape of c_alpha is invalid.")
         else:
             raise ValueError("The shape of c_alpha is invalid.")
-        self.beta0 = beta0
-        self.nu0 = nu0
-        if m0.shape == (D,):
-            self.m0 = np.tile(m0, (K, 1))
-        elif m0.shape == (K, D):
-            self.m0 = m0
-        else:
-            raise ValueError("The shape of m0 is invalid.")
-        self.W0 = W0
         
 
         self.alpha = None
@@ -116,6 +129,9 @@ class BayesianGaussianMixtureModel:
             raise ValueError("generate_filter must be a string, None, or a function")
         self.fit_filter_args = fit_filter_args
         self.generate_filter_args = generate_filter_args
+        self.track_learning = track_learning    
+        if self.track_learning:
+            self.history = xr.Dataset()
 
     def _init_params(self, X=None, random_state=None):
         '''
@@ -136,8 +152,8 @@ class BayesianGaussianMixtureModel:
 
         
         self.alpha = self.alpha0 + N / self.K * np.ones(self.K)
-        self.beta = (self.beta0 + N / self.K) * np.ones(self.K)
-        self.nu = (self.nu0 + N / self.K) * np.ones(self.K)
+        self.beta = self.beta0 + N / self.K * np.ones(self.K)
+        self.nu = self.nu0 + N / self.K * np.ones(self.K)
         self.m = self.m0 
         self.W = np.tile(self.W0, (self.K, 1, 1))
 
@@ -224,10 +240,11 @@ class BayesianGaussianMixtureModel:
         lower_bound : float
             The variational lower bound, where the final constant term is omitted.
         '''
+        r = np.clip(r, 1e-10, 1-1e-10)
         return - (r * np.log(r)).sum() + \
             logC(self.alpha0) - logC(self.alpha) +\
-            self.D/2 * (self.K * np.log(self.beta0) - np.log(self.beta).sum()) + \
-            self.K * logB(self.W0, self.nu0) - logB(self.W, self.nu).sum()
+            self.D/2 * (np.log(self.beta0).sum() - np.log(self.beta).sum()) + \
+            self.K * logB(self.W0, self.nu0).sum() - logB(self.W, self.nu).sum()
 
 
     def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
@@ -429,8 +446,8 @@ class BayesianGaussianMixtureModel:
 
 
 class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None):
-        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args)
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
+        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args, track_learning)
         self.C = None
         self.Z = None
 
@@ -478,7 +495,6 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
 
             lower_bound_prev = lower_bound
             lower_bound = self._calc_lower_bound(r)
-
             if abs(lower_bound - lower_bound_prev) < tol:
                 break
 
@@ -513,7 +529,19 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             Whether to show the message on the result.
         '''
         data = source_agent.generate(N)
-        if self.fit_filter is None:
+        self.history = xr.Dataset({
+            'alpha': (['n', 'k'], np.zeros((N, self.K))),  # Changed dimensions to match 2D array
+            'beta': (['n', 'k'], np.zeros((N, self.K))),   # Changed dimensions to match 2D array
+            'nu': (['n', 'k'], np.zeros((N, self.K))),     # Changed dimensions to match 2D array
+            'm': (['n', 'k', 'd'], np.zeros((N, self.K, self.D))),  # Changed dimensions to match 3D array
+            'W': (['n', 'k', 'd', 'd'], np.zeros((N, self.K, self.D, self.D)))  # Changed dimensions to match 4D array
+        }, coords={
+            'n': np.arange(N),
+            'k': np.arange(self.K),
+            'd': np.arange(self.D)
+        })
+
+        if self.fit_filter is None and self.track_learning is False:
             self.fit(data, max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message)
         else:
             count = -1
@@ -525,6 +553,12 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                         data = source_agent.generate(N)
 
                     if self.fit(data.sel(n=count), max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message):
+                        if self.track_learning:
+                            self.history['alpha'][i] = self.alpha
+                            self.history['beta'][i] = self.beta
+                            self.history['nu'][i] = self.nu
+                            self.history['m'][i] = self.m
+                            self.history['W'][i] = self.W
                         break
 
 
@@ -582,13 +616,14 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         self.alpha = self.alpha0 + n_samples_in_component
         self.beta = self.beta0 + n_samples_in_component
         self.nu = self.nu0 + n_samples_in_component
-        self.m = (self.m0 * self.beta0 + barx * np.reshape(n_samples_in_component, (self.K, 1)))/np.reshape(self.beta, (self.K, 1))
+        self.m = (self.beta0.reshape(-1, 1) * self.m0 + barx * np.reshape(n_samples_in_component, (self.K, 1)))/np.reshape(self.beta, (self.K, 1))
 
         diff2 = barx - self.m0
         Winv = np.reshape(np.linalg.inv( self.W0 ), (1, self.D, self.D)) + \
             S * np.reshape(n_samples_in_component, (self.K, 1, 1)) + \
             np.reshape( self.beta0 * n_samples_in_component / (self.beta0 + n_samples_in_component), (self.K, 1, 1)) * np.einsum("ki,kj->kij",diff2,diff2) 
         self.W = np.linalg.inv(Winv)
+
     def generate_(self, n_samples):
         '''
         Method for generating new data points based on the estimated model parameters.

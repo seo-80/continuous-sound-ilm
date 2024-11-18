@@ -10,7 +10,7 @@ import xarray as xr
 import sys
 import argparse
 from pathlib import Path
-
+import colorsys
 
 
 
@@ -34,6 +34,29 @@ remake_all = parser.parse_args().remake_all
 
 DATA_DIR = os.path.dirname(__file__) +"/../data/"
 
+def generate_colors(n):
+    """
+    n個の視覚的に区別しやすい色を生成する
+    
+    Parameters:
+    n (int): 必要な色の数
+    
+    Returns:
+    list: RGBカラーコードのリスト
+    """
+    colors = []
+    for i in range(n):
+        # HSVカラースペースで均等に色相を分割
+        hue = i / n
+        saturation = 0.7  # 彩度
+        value = 0.9      # 明度
+        
+        # HSVからRGBに変換し、文字列形式に変更
+        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+        colors.append(rgb)
+    
+    return colors
+
 matched_data = []   
 if folder_name == 'all':
     folder_names = os.listdir(DATA_DIR)
@@ -56,6 +79,7 @@ for folder_name in folder_names:
         Z = np.load(DATA_DIR+folder_name+"/Z.npy")
         C = np.load(DATA_DIR+folder_name+"/context.npy")
         K = temp_config["K"]
+        print(K)
         params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
         retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
         metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
@@ -77,15 +101,27 @@ for folder_name in folder_names:
             
 
         iter = params["m"].shape[0]
+        print([params.keys() - {"m"}])
+
+        if os.path.exists(DATA_DIR+folder_name+"/history.nc"):
+            history_m = xr.open_dataset(DATA_DIR+folder_name+"/history.nc", drop_variables=list(params.keys() - {"m"}))
+        history_m_diff = np.array([history_m['m'][i] - history_m['m'][i-1][-1] for i in range(1, len(history_m['m']))])
+        history_m_diff = np.linalg.norm(history_m_diff, axis=-1)
+
+        history_m_diff = np.mean(history_m_diff, axis=0)
+        fig, axs = plt.subplots()
+        print(history_m_diff.shape)
+        for k in range(K):
+            axs.plot(history_m_diff[:,k], label=f"Cluster {k+1}")
+        axs.set_xlabel("Iteration")
+        axs.set_ylabel("Difference")
+        axs.legend()
+        plt.savefig(os.path.join(DATA_DIR, folder_name, "history_m_diff.png"))
 
         # plot mean step difference
         fig, axs = plt.subplots()
         # Calculate mean step difference for each cluster
-        print(params["m"].shape)
-        print(np.diff(params["m"], axis=0).shape)
-        print(np.linalg.norm(np.diff(params["m"], axis=0), axis=-1).shape)
-        mean_step_diff = np.mean(np.linalg.norm(np.diff(params["m"], axis=0), axis=-1), axis=0)
-        print(mean_step_diff)
+        mean_step_diff = np.mean(np.linalg.norm(np.diff(params["m"][len(params['m'])//10:], axis=0), axis=-1), axis=0)
         # Create bar plot of mean step differences
         axs.bar(range(1, K+1), mean_step_diff)
         axs.set_xticks(range(1, K+1))
@@ -132,13 +168,16 @@ for folder_name in folder_names:
         fig, axs = plt.subplots()
         # Create a colormap
         colors = plt.cm.viridis(np.linspace(0, 1, iter))
-        cluster_colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        # Extend cluster_colors to support up to 32 clusters
+        # Extend cluster_colors to support up to 32 clusters
+        cluster_colors = list(plt.get_cmap('tab20').colors) + list(plt.get_cmap('tab20b').colors)
+        print(cluster_colors)
 
         # Plot the trajectory of params["m"] in 2D space with color gradient
         for k in range(K):
             for i in range(1, iter):
                 axs.plot(params["m"][i-1:i+1, k, 0], params["m"][i-1:i+1, k, 1], color=colors[i], alpha=0.5)
-            axs.scatter(params["m"][-1, k, 0], params["m"][-1, k, 1], marker='o', s=10, label=f"Cluster {k+1}", c=cluster_colors[k])
+            axs.scatter(params["m"][-1, k, 0], params["m"][-1, k, 1], marker='o', s=10, label=f"Cluster {k+1}", c=[cluster_colors[k]])
 
         axs.set_xlim(x_lim)
         axs.set_ylim(y_lim)
@@ -208,10 +247,9 @@ for folder_name in folder_names:
             artists = []
 
             fake_z = np.argmax(Z[i], axis=1)
-            colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
             for z in range(K):
                 X_with_z = X[i][fake_z == z]
-                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=2, alpha=0.5)
+                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
             artists.append(scatter)
 
             for k in range(K):
@@ -226,7 +264,7 @@ for folder_name in folder_names:
 
                 rv = multivariate_normal(mean, covar)
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
-                contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=colors[k])
+                contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
             axs.legend([f'Cluster {i}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
@@ -243,10 +281,9 @@ for folder_name in folder_names:
             artists = []
 
             fake_z = np.argmax(C[i], axis=1)
-            colors = ['red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
             for z in range(K):
                 X_with_z = X[i][fake_z == z]
-                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=colors[z], s=2, alpha=0.5)
+                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
             artists.append(scatter)
 
             for k in range(K):
@@ -261,7 +298,7 @@ for folder_name in folder_names:
 
                 rv = multivariate_normal(mean, covar)
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
-                contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=colors[k])
+                contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
             axs.legend([f'Cluster {i}' for i in range(K)], loc='upper right')
 
@@ -273,5 +310,7 @@ for folder_name in folder_names:
 
         ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
         ani.save(DATA_DIR+folder_name+"/animation_colored_with_C.gif", writer="pillow")
+
+
         
         plt.cla()
