@@ -16,9 +16,9 @@ import colorsys
 
 
 
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from src.utils import metrics
-from procece_data import procece_data
+from experiments.procece_data import procece_data
 
 
 parser = argparse.ArgumentParser(description='Process some data.')
@@ -32,7 +32,7 @@ remake_all = parser.parse_args().remake_all
 
 #load data
 
-DATA_DIR = os.path.dirname(__file__) +"/../data/"
+DATA_DIR = os.path.dirname(__file__) +"/../../data/"
 
 def generate_colors(n):
     """
@@ -79,7 +79,10 @@ for folder_name in folder_names:
         Z = np.load(DATA_DIR+folder_name+"/Z.npy")
         C = np.load(DATA_DIR+folder_name+"/context.npy")
         K = temp_config["K"]
-        print(K)
+        excluded_data = None
+        if os.path.exists(DATA_DIR+folder_name+"/excluded_data.nc"):
+            excluded_data = xr.open_dataset(DATA_DIR+folder_name+"/excluded_data.nc")
+
         params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
         retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
         metrics_data = xr.open_dataset(os.path.join(DATA_DIR, folder_name, "metrics.nc"))
@@ -105,18 +108,17 @@ for folder_name in folder_names:
 
         if os.path.exists(DATA_DIR+folder_name+"/history.nc"):
             history_m = xr.open_dataset(DATA_DIR+folder_name+"/history.nc", drop_variables=list(params.keys() - {"m"}))
-        history_m_diff = np.array([history_m['m'][i] - history_m['m'][i-1][-1] for i in range(1, len(history_m['m']))])
-        history_m_diff = np.linalg.norm(history_m_diff, axis=-1)
+            history_m_diff = np.array([history_m['m'][i] - history_m['m'][i-1][-1] for i in range(1, len(history_m['m']))])
+            history_m_diff = np.linalg.norm(history_m_diff, axis=-1)
 
-        history_m_diff = np.mean(history_m_diff, axis=0)
-        fig, axs = plt.subplots()
-        print(history_m_diff.shape)
-        for k in range(K):
-            axs.plot(history_m_diff[:,k], label=f"Cluster {k+1}")
-        axs.set_xlabel("Iteration")
-        axs.set_ylabel("Difference")
-        axs.legend()
-        plt.savefig(os.path.join(DATA_DIR, folder_name, "history_m_diff.png"))
+            history_m_diff = np.mean(history_m_diff, axis=0)
+            fig, axs = plt.subplots()
+            for k in range(K):
+                axs.plot(history_m_diff[:,k], label=f"Cluster {k+1}")
+            axs.set_xlabel("sumple number")
+            axs.set_ylabel("Difference")
+            axs.legend()
+            plt.savefig(os.path.join(DATA_DIR, folder_name, "history_m_diff.png"))
 
         # plot mean step difference
         fig, axs = plt.subplots()
@@ -131,6 +133,21 @@ for folder_name in folder_names:
         plt.tight_layout() 
         plt.savefig(os.path.join(DATA_DIR, folder_name, "mean_step_diff.png"))
         plt.close(fig)
+        
+        # plot std of mean
+        fig, axs = plt.subplots()
+        # Calculate variance of mean for each cluster
+        std_m =  np.sqrt(np.var(params["m"][len(params['m'])*5//10:], axis=0).mean(axis=1)) 
+        # Create bar plot of variance of mean
+        axs.bar(range(1, K+1), std_m)
+        axs.set_xticks(range(1, K+1))
+        axs.set_xticklabels([f"Cluster {k+1}" for k in range(K)])
+        axs.set_ylabel("Standard Deviation of Mean")
+        axs.set_title("Standard Deviation of Mean by Cluster")
+        plt.tight_layout()
+        plt.savefig(os.path.join(DATA_DIR, folder_name, "std_m.png"))
+
+
 
         # plot metrics
         ## plot expected_mahalanobis mean
@@ -171,7 +188,7 @@ for folder_name in folder_names:
         # Extend cluster_colors to support up to 32 clusters
         # Extend cluster_colors to support up to 32 clusters
         cluster_colors = list(plt.get_cmap('tab20').colors) + list(plt.get_cmap('tab20b').colors)
-        print(cluster_colors)
+
 
         # Plot the trajectory of params["m"] in 2D space with color gradient
         for k in range(K):
@@ -216,6 +233,10 @@ for folder_name in folder_names:
 
             scatter = axs.scatter(X[i][:, 0], X[i][:, 1], s=2, alpha=0.5)
             artists.append(scatter)
+            if excluded_data is not None:
+                excluded = excluded_data['X'][i]
+                scatter = axs.scatter(excluded[:, 0], excluded[:, 1], s=2, alpha=0.5, c='red')
+                artists.append(scatter)
 
             for k in range(K):
                 mean = params["m"][i, k]
@@ -266,7 +287,7 @@ for folder_name in folder_names:
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
                 contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
-            axs.legend([f'Cluster {i}' for i in range(K)], loc='upper right')
+            axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
 
             # plt.tight_layout()
@@ -300,7 +321,7 @@ for folder_name in folder_names:
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
                 contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
-            axs.legend([f'Cluster {i}' for i in range(K)], loc='upper right')
+            axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
 
             # axs.set_title(f"iteration {i}")
 

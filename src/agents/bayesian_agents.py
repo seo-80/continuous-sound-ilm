@@ -132,6 +132,7 @@ class BayesianGaussianMixtureModel:
         self.track_learning = track_learning    
         if self.track_learning:
             self.history = xr.Dataset()
+        self.excluded_data = []
 
     def _init_params(self, X=None, random_state=None):
         '''
@@ -145,7 +146,7 @@ class BayesianGaussianMixtureModel:
             int, specifying the seed for random initialization of m
         '''
         if X is None:
-            N, D = 1, self.D
+            N, D = 0, self.D
         else:
             N, D = X.shape
         rnd = np.random.RandomState(seed=random_state)
@@ -528,7 +529,10 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         disp_message : Boolean
             Whether to show the message on the result.
         '''
-        data = source_agent.generate(N)
+        data, excluded_data = source_agent.generate(N, return_excluded_data=True).values()
+        if self.generate_filter is not None:
+            self.excluded_data = excluded_data
+
         self.history = xr.Dataset({
             'alpha': (['n', 'k'], np.zeros((N, self.K))),  # Changed dimensions to match 2D array
             'beta': (['n', 'k'], np.zeros((N, self.K))),   # Changed dimensions to match 2D array
@@ -560,6 +564,9 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                             self.history['m'][i] = self.m
                             self.history['W'][i] = self.W
                         break
+                    else:
+                        self.excluded_data.append(data.sel(n=count))
+            self.excluded_data = xr.concat(self.excluded_data, dim='n').assign_coords(n=np.arange(len(self.excluded_data)))
 
 
     def _e_like_step(self, X, C):
@@ -624,82 +631,12 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             np.reshape( self.beta0 * n_samples_in_component / (self.beta0 + n_samples_in_component), (self.K, 1, 1)) * np.einsum("ki,kj->kij",diff2,diff2) 
         self.W = np.linalg.inv(Winv)
 
-    def generate_(self, n_samples):
-        '''
-        Method for generating new data points based on the estimated model parameters.
-
-        Parameters
-        ----------
-        n_samples : int
-            The number of samples to be generated.
-
-        Returns
-        ----------
-        X_new : 2D numpy array
-            A numpy array with shape (n_samples, self.D), where X_new[n] is the n-th generated sample.
-        C_new : 1D numpy array
-            A numpy array with shape (n_samples, ), where C_new[n] is the context of the n-th generated sample.
-        '''
-        ret_ds = xr.Dataset(
-            {
-                'X': (['n', 'd'], np.zeros((n_samples, self.D))),
-                'C': (['n', 'k'], np.zeros((n_samples, self.K))),
-                'Z': (['n', 'k'], np.zeros((n_samples, self.K))),
-            },
-            coords={'n': np.arange(n_samples), 'd': np.arange(self.D), 'k': np.arange(self.K)}
-        )
-        n_filtered_samples = 0
-        while True:
-            if self.c_alpha is None:
-                alpha_norm = self.alpha / self.alpha.sum()
-                z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
-                C_new = np.random.dirichlet(self.c_alpha, size=n_samples)
-            else:
-                if self.mixture_pi:
-                    comopnent_idx = np.random.choice(self.comopnent_num, size=n_samples, p=self.pi_mixture_ratio)
-                    z_new = []
-                    C_new = []
-                    for i in range(n_samples):
-                        C_new_temp = np.random.dirichlet(self.c_alpha[comopnent_idx[i]], size=1)[0]
-                        C_new.append(C_new_temp)
-                        z_new.append(np.random.multinomial(1, C_new_temp, size=1))
-                    z_new = np.vstack(z_new)
-                    C_new = np.vstack(C_new)
-                else:
-                    C_new_temp = np.random.dirichlet(self.c_alpha, size=n_samples)
-                    z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1)[0] for i in range(n_samples)])
-                    C_new = C_new_temp
-            X_new = np.zeros((n_samples, self.D))
-            for k in range(self.K):
-                idx = np.where(z_new[:, k] == 1)[0]
-                if len(idx) > 0:
-                    X_new[idx] = np.random.multivariate_normal(
-                        self.m[k], 
-                        np.linalg.inv(self.beta[k] * self.W[k]),
-                        size=len(idx)
-                    )
-            temp_ret_ds = xr.Dataset(
-                {
-                    'X': (['n', 'd'], X_new),
-                    'C': (['n', 'k'], C_new),
-                    'Z': (['n', 'k'], z_new),
-                },
-                coords={'n': np.arange(n_samples), 'd': np.arange(self.D), 'k': np.arange(self.K)}
-            )
-            if not self.generate_filter is None:
-                temp_ret_ds = temp_ret_ds[self.generate_filter(temp_ret_ds, self, self.generate_filter_args)]
-            temp_n_samples = len(temp_ret_ds.X)
-            if temp_n_samples + n_filtered_samples > n_samples:
-                temp_n_samples = n_samples - n_filtered_samples
-                ret_ds = ret_ds.isel(n=slice(0, temp_n_samples))
-            ret_ds[n_filtered_samples:n_filtered_samples+temp_n_samples] = temp_ret_ds
-            n_filtered_samples += temp_n_samples
-            if n_filtered_samples == n_samples:
-                return ret_ds[:n_samples]
-    def generate(self, n_samples):
+    def generate(self, n_samples,return_excluded_data=False):
         # 結果を格納するリスト
         collected_datasets = []
+        excluded_data = []
         n_filtered_samples = 0
+        
         
         while n_filtered_samples < n_samples:
             # サンプル生成のバッチサイズを決定
@@ -764,6 +701,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             # フィルタリング処理
             if self.generate_filter is not None:
                 filtered_index = self.generate_filter(temp_ret_ds, self, self.generate_filter_args)
+                temp_excluded_data = temp_ret_ds.isel(n=~filtered_index)
                 temp_ret_ds = temp_ret_ds.isel(n=filtered_index)
             
             # 条件を満たすサンプルを追加
@@ -771,6 +709,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 temp_n_samples = min(len(temp_ret_ds.X), n_samples - n_filtered_samples)
                 if temp_n_samples > 0:
                     collected_datasets.append(temp_ret_ds.isel(n=slice(0, temp_n_samples)))
+                    excluded_data.append(temp_excluded_data)
                     n_filtered_samples += temp_n_samples
         
         # すべてのデータセットを結合
@@ -778,7 +717,15 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             final_ds = xr.concat(collected_datasets, dim='n')
             # インデックスを0から始まるように再調整
             final_ds = final_ds.assign_coords(n=np.arange(len(final_ds.n)))
-            return final_ds
+            final_excluded_data = xr.concat(excluded_data, dim='n')
+            final_excluded_data = final_excluded_data.assign_coords(n=np.arange(len(final_excluded_data.n)))
+            if return_excluded_data:
+                return {
+                    'data': final_ds,
+                    'excluded_data': final_excluded_data
+                }
+            else:
+                return final_ds
         else:
             # 空のデータセットを返す場合
             return xr.Dataset(

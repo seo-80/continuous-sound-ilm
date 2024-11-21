@@ -30,9 +30,6 @@ class ExperimentConfig:
     generate_filter_name: str
     fit_filter_args: Dict[str, Any]
     generate_filter_args: Dict[str, Any]
-    true_alpha: np.ndarray
-    true_means: np.ndarray
-    true_covars: np.ndarray
 
     @classmethod
     def create_default_config(cls) -> 'ExperimentConfig':
@@ -42,15 +39,12 @@ class ExperimentConfig:
         true_K = 8
         
         # Default parameters
-        true_alpha = np.array([1/true_K for _ in range(true_K)])
-        true_means = np.array([[0, 0] for _ in range(true_K)])
-        true_covars = np.array([np.eye(D)*0.2 for _ in range(true_K)])
-        
         c_alpha = np.array([1/K for _ in range(K)])
         alpha0 = 100.0
-        beta0 = np.array([0.1 for _ in range(K)])
+        beta0 = np.array([1 if i%2 ==0 else 0.1 for i in range(K)])
         nu0 = D + 2.0
-        m0 = np.array([[0, 0] for i in range(K)])
+        m0_range = 10
+        m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
         W0 = np.eye(D)*0.02
 
         return cls(
@@ -60,12 +54,9 @@ class ExperimentConfig:
             c_alpha=c_alpha, m0=m0, W0=W0,
             iter=100,
             fit_filter_name="none",
-            generate_filter_name="high_entropy",
+            generate_filter_name="missunderstand",
             fit_filter_args={},
-            generate_filter_args={"threshold": 1/16},
-            true_alpha=true_alpha,
-            true_means=true_means,
-            true_covars=true_covars
+            generate_filter_args={},
         )
     def load_config(self, path: str):
         with open(path, "r") as f:
@@ -110,6 +101,7 @@ class ExperimentManager:
         self.X = []
         self.C = []
         self.Z = []
+        self.excluded_data = []
         self.retry_counts = []
         if self.track_learning:
             self.history = xr.Dataset({
@@ -188,12 +180,7 @@ class ExperimentManager:
 
     def run_experiment(self):
         """実験の実行"""
-        X_0, C_0, z_0 = self.generate_initial_data()
-        parent_agent = self.fit_parent_agent(X_0, C_0, z_0)
-        
-        self.X.append(X_0)
-        self.C.append(C_0)
-        self.Z.append(z_0)
+        parent_agent = self.create_agent()
 
         for i in tqdm.tqdm(range(self.config.iter)):
             child_agent = self.create_agent()
@@ -212,6 +199,7 @@ class ExperimentManager:
             self.params["nu"][i] = child_agent.nu
             self.params["m"][i] = child_agent.m
             self.params["W"][i] = child_agent.W
+            self.excluded_data.append(child_agent.excluded_data)
             if self.track_learning:
                 self.history['alpha'][i] = child_agent.history['alpha']
                 self.history['beta'][i] = child_agent.history['beta']
@@ -230,6 +218,10 @@ class ExperimentManager:
             np.save(os.path.join(self.save_path, "Z.npy"), self.Z)
         np.save(os.path.join(self.save_path, "retry_counts.npy"), self.retry_counts)
         np.save(os.path.join(self.save_path, "params.npy"), self.params)
+        # save excluded data
+        excluded_data_combined = xr.concat(self.excluded_data, dim='iter')
+        print(excluded_data_combined)
+        excluded_data_combined.to_netcdf(os.path.join(self.save_path, "excluded_data.nc"))
         
         # Convert config to JSON-serializable format
         config_dict = {k: v.tolist() if isinstance(v, np.ndarray) else v 
@@ -247,7 +239,7 @@ def main():
     config = ExperimentConfig.create_default_config()
     
     # 実験の実行
-    experiment = ExperimentManager(config, DATA_DIR, track_learning=True)
+    experiment = ExperimentManager(config, DATA_DIR)#, track_learning=True)
     experiment.run_experiment()
     experiment.save_results()
 

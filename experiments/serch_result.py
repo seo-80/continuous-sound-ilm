@@ -67,7 +67,7 @@ def is_shape_equal(data, expected_shape) -> bool:
     return data.shape == expected_shape
 
 
-K = 8
+K = 16
 conditions = [
     {
         "path": "agent",
@@ -84,15 +84,25 @@ conditions = [
     #     "operator": "eq",
     #     "value": "high_entropy"
     # }
+    # {
+    #     "path": "c_alpha",
+    #     "operator": all_elements_not_equal,
+    #     "value": None
+    # },
+    # {
+    #     "path": "c_alpha",
+    #     "operator": is_shape_equal,
+    #     "value": (K,)
+    # }
+    # {
+    #     "path": "iter",
+    #     "operator": "eq",
+    #     "value": 1000
+    # },
     {
-        "path": "c_alpha",
-        "operator": all_elements_not_equal,
-        "value": None
-    },
-    {
-        "path": "c_alpha",
-        "operator": is_shape_equal,
-        "value": (K,)
+        "path": "generate_filter_func",
+        "operator": "eq",
+        "value": "missunderstand"
     }
 
 ]
@@ -220,7 +230,12 @@ if __name__ == "__main__":
         if search_result:
             print(configs[i]['folder_name'])
             if print_config:
-                print(configs[i]['config'])
+                conditions_keys = [condition['path'] for condition in conditions]
+                for key, value in configs[i]['config'].items():
+                    if key in conditions_keys:
+                        pass
+                    else:
+                        print(f"{key}: {value}")
         
 
     
