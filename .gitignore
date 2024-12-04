@@ -13,3 +13,6 @@ Thumbs.db
 
 # data ディレクトリ
 data/
+figure/
+*__pycache__/
+
