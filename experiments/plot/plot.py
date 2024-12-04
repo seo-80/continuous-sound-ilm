@@ -25,9 +25,15 @@ parser = argparse.ArgumentParser(description='Process some data.')
 
 parser.add_argument('folder_name',nargs="?" , type=str, default="all", help='input file path')
 parser.add_argument('--remake_all', action='store_true')
+parser.add_argument('--latest', action='store_true')
 
 folder_name = parser.parse_args().folder_name
 remake_all = parser.parse_args().remake_all
+latest = parser.parse_args().latest
+
+if latest and remake_all:
+    print("latest and remake_all are exclusive")
+    exit()
 
 
 #load data
@@ -56,11 +62,41 @@ def generate_colors(n):
         colors.append(rgb)
     
     return colors
+def generate_double_gradation(n):
+    """
+    n個の視覚的に区別しやすい色を生成する
+    
+    Parameters:
+    n (int): 必要な色の数
+    
+    Returns:
+    list: RGBカラーコードのリスト
+    """
+    # Start with red and end with orange
+    start_color1 = (0.0, 0.0, 1.0)  # Blue in RGB
+    start_color2 = (1.0, 0.0, 0.0)  # Red in RGB
+    end_color1 = (0.0, 0.8, 1.0)   # Light blue in RGB
+    end_color2 = (1.0, 0.8, 0.0)   # Orange in RGB
+    
+    colors = []
+    for i in range(n):
+        if i % 2 == 0:
+            t = (i // 2) / ((n-1) // 2)  # Normalized position
+            color = tuple(start_color1[j] + (end_color1[j] - start_color1[j]) * t for j in range(3))
+        else:
+            t = ((i-1) // 2) / (n // 2)  # Normalized position
+            color = tuple(start_color2[j] + (end_color2[j] - start_color2[j]) * t for j in range(3))
+        colors.append(color)
+    
+    return colors
 
-matched_data = []   
+matched_data = []  
 if folder_name == 'all':
     folder_names = os.listdir(DATA_DIR)
     folder_names = sorted(os.listdir(DATA_DIR), reverse=True)
+    if latest:
+        folder_names = sorted(folder_names, reverse=True)[:1]
+        remake_all = True
 else:
     folder_names = [folder_name]
     remake_all = True
@@ -79,9 +115,12 @@ for folder_name in folder_names:
         Z = np.load(DATA_DIR+folder_name+"/Z.npy")
         C = np.load(DATA_DIR+folder_name+"/context.npy")
         K = temp_config["K"]
-        excluded_data = None
+        
         if os.path.exists(DATA_DIR+folder_name+"/excluded_data.nc"):
-            excluded_data = xr.open_dataset(DATA_DIR+folder_name+"/excluded_data.nc")
+            try:
+                excluded_data = xr.open_dataset(DATA_DIR+folder_name+"/excluded_data.nc")
+            except:
+                excluded_data = None
 
         params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
         retry_counts = np.load(DATA_DIR+folder_name+"/retry_counts.npy")
@@ -104,7 +143,17 @@ for folder_name in folder_names:
             
 
         iter = params["m"].shape[0]
-        print([params.keys() - {"m"}])
+        # cluster_colors = generate_colors(K)
+        # cluster_colors = plt.cm.tab20b(np.linspace(0, 1, K))
+        # cluster_colors = []
+        # for i in range(K):
+        #     if i % 2 == 0:
+        #         # cluster_colors.append('blue')
+        #         cluster_colors.append(plt.cm.tab20c(i//2))
+        #     else:
+        #         # cluster_colors.append('orange')
+        #         cluster_colors.append(plt.cm.tab20c(4+i//2))
+        cluster_colors = generate_double_gradation(K)
 
         if os.path.exists(DATA_DIR+folder_name+"/history.nc"):
             history_m = xr.open_dataset(DATA_DIR+folder_name+"/history.nc", drop_variables=list(params.keys() - {"m"}))
@@ -120,6 +169,66 @@ for folder_name in folder_names:
             axs.legend()
             plt.savefig(os.path.join(DATA_DIR, folder_name, "history_m_diff.png"))
 
+            # plot animation of learning process of last generation
+            fig, axs = plt.subplots()
+            last_generation_history = xr.open_dataset(DATA_DIR+folder_name+"/history.nc").sel(iter=99)
+            print(last_generation_history)
+            def update(i):
+                axs.clear()
+                artists = []
+
+                # Plot data points up to current time i
+                fake_z = np.argmax(Z[-1], axis=1)
+                for z in range(K):
+                    X_with_z = X[-1][fake_z == z][:i]
+                    scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.2)
+                    artists.append(scatter)
+
+                # Plot current distribution
+                for k in range(K):
+                    mean = last_generation_history["m"][i][k]
+                    matrix = (last_generation_history["beta"][i][k].values * 
+                                last_generation_history["W"][i][k, :, :].values)
+                    covar = np.linalg.inv(matrix)
+                    axs.set_xlim(-30, 30)
+                    axs.set_ylim(-30, 30)
+                    x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
+                    xy = np.column_stack([x.flat, y.flat])
+                    z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
+
+                    rv = multivariate_normal(mean, covar)
+                    level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+                    # levels = level * np.linspace(0, 5, 10)
+                    levels = [level]
+                    contour = axs.contour(x, y, z, levels=levels, colors=[cluster_colors[k]])
+                    artists.append(contour)
+                    contourf = axs.contourf(x, y, z, levels=[level,1], colors=[cluster_colors[k]], alpha=0.2)
+                    artists.append(contourf)
+                
+                # Plot prior means and arrows to current means
+                for k in range(K):
+                    prior_mean = temp_config["m0"][k]
+                    marker = axs.scatter(prior_mean[0], prior_mean[1], marker='x', color=cluster_colors[k])
+                    artists.append(marker)
+                    learned_mean = last_generation_history["m"][i][k]
+                    arrow = axs.arrow(prior_mean[0], prior_mean[1], 
+                                    learned_mean[0] - prior_mean[0], 
+                                    learned_mean[1] - prior_mean[1], 
+                                    head_width=0.8, head_length=0.8, 
+                                    fc=cluster_colors[k], ec=cluster_colors[k])
+                    artists.append(arrow)
+
+                return artists
+            # Create animation
+            anim = animation.FuncAnimation(fig, update, frames=len(params["m"]), interval=50, blit=True)
+            
+            # Save animation
+            anim.save(os.path.join(DATA_DIR, folder_name, "learning_animation.gif"), writer='pillow')
+            plt.close(fig)
+        
+
+        # Create a list of alternating blue and orange colors
+        
         # plot mean step difference
         fig, axs = plt.subplots()
         # Calculate mean step difference for each cluster
@@ -187,7 +296,6 @@ for folder_name in folder_names:
         colors = plt.cm.viridis(np.linspace(0, 1, iter))
         # Extend cluster_colors to support up to 32 clusters
         # Extend cluster_colors to support up to 32 clusters
-        cluster_colors = list(plt.get_cmap('tab20').colors) + list(plt.get_cmap('tab20b').colors)
 
 
         # Plot the trajectory of params["m"] in 2D space with color gradient
@@ -206,7 +314,7 @@ for folder_name in folder_names:
 
         fig, axs = plt.subplots()
         for k in range(K):
-            axs.plot(params["m"][:, k, 0], params["m"][:, k, 1], label=f"Cluster {k+1}")
+            axs.plot(params["m"][:, k, 0], params["m"][:, k, 1], label=f"Cluster {k+1}", c=cluster_colors[k])
         axs.set_xlim(x_lim)
         axs.set_ylim(y_lim)
         plt.savefig(os.path.join(DATA_DIR, folder_name,"trajectory2.png"))
@@ -234,9 +342,10 @@ for folder_name in folder_names:
             scatter = axs.scatter(X[i][:, 0], X[i][:, 1], s=2, alpha=0.5)
             artists.append(scatter)
             if excluded_data is not None:
-                excluded = excluded_data['X'][i]
-                scatter = axs.scatter(excluded[:, 0], excluded[:, 1], s=2, alpha=0.5, c='red')
-                artists.append(scatter)
+                if 'iter' in excluded_data.dims:
+                    excluded = excluded_data['X'][i]
+                    scatter = axs.scatter(excluded[:, 0], excluded[:, 1], s=2, alpha=0.5, c='red')
+                    artists.append(scatter)
 
             for k in range(K):
                 mean = params["m"][i, k]
@@ -270,58 +379,78 @@ for folder_name in folder_names:
             fake_z = np.argmax(Z[i], axis=1)
             for z in range(K):
                 X_with_z = X[i][fake_z == z]
-                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
+                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.2)
             artists.append(scatter)
 
             for k in range(K):
                 mean = params["m"][i, k]
                 matrix = params["beta"][i, k] * params["W"][i, k, :, :]
                 covar = np.linalg.inv(matrix)
-                axs.set_xlim(x_lim)
-                axs.set_ylim(y_lim)
+                # axs.set_xlim(x_lim)
+                # axs.set_ylim(y_lim)
+                axs.set_xlim(-30, 30)
+                axs.set_ylim(-30, 30)
                 x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
                 xy = np.column_stack([x.flat, y.flat])
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
                 rv = multivariate_normal(mean, covar)
                 level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
-                contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
+                
+                contour = axs.contour(x, y, z, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
-            axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
+                contourf = axs.contourf(x, y, z, levels=[level,1], colors=[cluster_colors[k]], alpha=0.2)
+                artists.append(contourf)
+            
+            # 事前分布中心から学習後の中心までの矢印を描画
+            for k in range(K):
+                prior_mean = temp_config["m0"][k]
+                marker = axs.scatter(prior_mean[0], prior_mean[1], marker='x', color=cluster_colors[k])
+                artists.append(marker)
+                learned_mean = params["m"][i, k]
+                arrow = axs.arrow(prior_mean[0], prior_mean[1], 
+                                  learned_mean[0] - prior_mean[0], 
+                                  learned_mean[1] - prior_mean[1], 
+                                  head_width=0.8, head_length=0.8, 
+                                  fc=cluster_colors[k], ec=cluster_colors[k])
+                artists.append(arrow)
+
+
+            # axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
 
             # plt.tight_layout()
 
             return artists
 
-        ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
-        ani.save(DATA_DIR+folder_name+"/animation_colored_with_z.gif", writer="pillow")
-        fig, axs = plt.subplots()
-        def update(i):
-            axs.clear()
-            artists = []
+        # ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
+        # ani.save(DATA_DIR+folder_name+"/animation_colored_with_z.gif", writer="pillow")
+        # fig, axs = plt.subplots()
+        # def update(i):
+        #     axs.clear()
+        #     artists = []
 
-            fake_z = np.argmax(C[i], axis=1)
-            for z in range(K):
-                X_with_z = X[i][fake_z == z]
-                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
-            artists.append(scatter)
+        #     fake_z = np.argmax(C[i], axis=1)
+        #     for z in range(K):
+        #         X_with_z = X[i][fake_z == z]
+        #         scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
+        #     artists.append(scatter)
 
-            for k in range(K):
-                mean = params["m"][i, k]
-                matrix = params["beta"][i, k] * params["W"][i, k, :, :]
-                covar = np.linalg.inv(matrix)
-                axs.set_xlim(x_lim)
-                axs.set_ylim(y_lim)
-                x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
-                xy = np.column_stack([x.flat, y.flat])
-                z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
+        #     for k in range(K):
+        #         mean = params["m"][i, k]
+        #         matrix = params["beta"][i, k] * params["W"][i, k, :, :]
+        #         covar = np.linalg.inv(matrix)
+        #         axs.set_xlim(x_lim)
+        #         axs.set_ylim(y_lim)
+        #         x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
+        #         xy = np.column_stack([x.flat, y.flat])
+        #         z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
-                rv = multivariate_normal(mean, covar)
-                level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
-                contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
-                artists.append(contour)
-            axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
+        #         rv = multivariate_normal(mean, covar)
+        #         level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+        #         contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
+        #         artists.append(contour)
+        #     axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
 
             # axs.set_title(f"iteration {i}")
 

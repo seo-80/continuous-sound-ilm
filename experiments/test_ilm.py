@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 import tqdm
+import hashlib
+import argparse
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from src.agents import BayesianGaussianMixtureModel, BayesianGaussianMixtureModelWithContext
@@ -18,7 +20,6 @@ class ExperimentConfig:
     D: int  # 次元数
     N: int  # サンプル数
     agent: str
-    true_K: int
     alpha0: float
     beta0: float
     nu0: float
@@ -33,22 +34,23 @@ class ExperimentConfig:
 
     @classmethod
     def create_default_config(cls) -> 'ExperimentConfig':
-        K = 8
+        K = 4
         D = 2
         N = 1000
-        true_K = 8
         
         # Default parameters
         c_alpha = np.array([1/K for _ in range(K)])
         alpha0 = 100.0
-        beta0 = np.array([1 if i%2 ==0 else 0.1 for i in range(K)])
+        # beta0 = np.array([1 if i%2 ==0 else 0.01 for i in range(K)])
+        beta0 = np.array([9 for i in range(K)])
         nu0 = D + 2.0
         m0_range = 10
         m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
+        # m0 = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
         W0 = np.eye(D)*0.02
 
         return cls(
-            K=K, D=D, N=N, true_K=true_K,
+            K=K, D=D, N=N,
             agent="BayesianGaussianMixtureModelWithContext",
             alpha0=alpha0, beta0=beta0, nu0=nu0,
             c_alpha=c_alpha, m0=m0, W0=W0,
@@ -58,14 +60,46 @@ class ExperimentConfig:
             fit_filter_args={},
             generate_filter_args={},
         )
-    def load_config(self, path: str):
+    
+        # weght = 4
+        # c_alpha = np.array([[2*(weght-1)/weght/K,2*(weght-1)/weght/K, 2/weght/K, 2/weght/K], [2/weght/K, 2/weght/K, 2*(weght-1)/weght/K,2*(weght-1)/weght/K,]])
+        # alpha0 = 100.0
+        # beta0 = np.array([1 if i%2 ==0 else 0.01 for i in range(K)])
+        # beta0 = np.array([8 for i in range(K)])
+        # nu0 = D + 2.0
+        # m0_range = 10
+        # m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
+        # m0 = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
+        # W0 = np.eye(D)*0.02
+
+        # return cls(
+        #     K=K, D=D, N=N, 
+        #     agent="BayesianGaussianMixtureModelWithContext",
+        #     alpha0=alpha0, beta0=beta0, nu0=nu0,
+        #     c_alpha=c_alpha, m0=m0, W0=W0,
+        #     iter=1000,
+        #     fit_filter_name="none",
+        #     generate_filter_name="missunderstand",
+        #     fit_filter_args={},
+        #     generate_filter_args={},
+        # )
+    @classmethod
+    def load_config(cls, path: str):
         with open(path, "r") as f:
             config = json.load(f)
-        return cls(
+        # Convert lists to numpy arrays if they exist in config
+        if isinstance(config["beta0"], list):
+            config["beta0"] = np.array(config["beta0"])
+        if isinstance(config["m0"], list):
+            config["m0"] = np.array(config["m0"])
+        if isinstance(config["W0"], list):
+            config["W0"] = np.array(config["W0"])
+        if isinstance(config["c_alpha"], list):
+            config["c_alpha"] = np.array(config["c_alpha"])
+        ret_config = cls(
             K=config["K"],
             D=config["D"],
             N=config["N"],
-            true_K=config["true_K"],
             agent=config["agent"],
             alpha0=config["alpha0"],
             beta0=config["beta0"],
@@ -78,10 +112,9 @@ class ExperimentConfig:
             generate_filter_name=config["generate_filter_name"],
             fit_filter_args=config["fit_filter_args"],
             generate_filter_args=config["generate_filter_args"],
-            true_alpha=np.array(config["true_alpha"]),
-            true_means=np.array(config["true_means"]),
-            true_covars=np.array(config["true_covars"])
         )
+            
+        return ret_config
 
 class ExperimentManager:
     def __init__(self, config: ExperimentConfig, save_dir: str, track_learning: bool = False):
@@ -180,6 +213,11 @@ class ExperimentManager:
 
     def run_experiment(self):
         """実験の実行"""
+        folder_name = self.save_path.split("/")[-1]
+        folder_name_hash = hashlib.md5(folder_name.encode()).hexdigest()
+        random_seed = int(folder_name_hash, 16) % (2**32)
+        np.random.seed(random_seed)
+
         parent_agent = self.create_agent()
 
         for i in tqdm.tqdm(range(self.config.iter)):
@@ -219,6 +257,7 @@ class ExperimentManager:
         np.save(os.path.join(self.save_path, "retry_counts.npy"), self.retry_counts)
         np.save(os.path.join(self.save_path, "params.npy"), self.params)
         # save excluded data
+        print(self.excluded_data)
         excluded_data_combined = xr.concat(self.excluded_data, dim='iter')
         print(excluded_data_combined)
         excluded_data_combined.to_netcdf(os.path.join(self.save_path, "excluded_data.nc"))
@@ -232,16 +271,22 @@ class ExperimentManager:
         if self.track_learning:
             self.history.to_netcdf(os.path.join(self.save_path, "history.nc"))
 
-def main():
+def main(folder_name: str):
     DATA_DIR = os.path.dirname(__file__) + "/../data/"
     
     # 設定の作成
-    config = ExperimentConfig.create_default_config()
+    if folder_name is not "None":
+        config = ExperimentConfig.load_config(os.path.join(DATA_DIR, folder_name, "config.json"))
+    else:
+        config = ExperimentConfig.create_default_config()
     
     # 実験の実行
-    experiment = ExperimentManager(config, DATA_DIR)#, track_learning=True)
+    experiment = ExperimentManager(config, DATA_DIR,track_learning=True)
     experiment.run_experiment()
     experiment.save_results()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('folder_name',nargs="?" , type=str, default="None", help='input file path')
+    folder_name = parser.parse_args().folder_name
+    main(folder_name)

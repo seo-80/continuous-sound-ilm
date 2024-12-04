@@ -67,18 +67,18 @@ def is_shape_equal(data, expected_shape) -> bool:
     return data.shape == expected_shape
 
 
-K = 16
+K = 4
 conditions = [
     {
         "path": "agent",
         "operator": "eq",
         "value": "BayesianGaussianMixtureModelWithContext"
     },
-    {
-        "path": "K",
-        "operator": "eq",
-        "value": K
-    },
+    # {
+    #     "path": "K",
+    #     "operator": "eq",
+    #     "value": K
+    # },
     # {
     #     "path": "filter_name",
     #     "operator": "eq",
@@ -86,7 +86,7 @@ conditions = [
     # }
     # {
     #     "path": "c_alpha",
-    #     "operator": all_elements_not_equal,
+    #     "operator": all_elements_equal,
     #     "value": None
     # },
     # {
@@ -99,13 +99,137 @@ conditions = [
     #     "operator": "eq",
     #     "value": 1000
     # },
+    # {
+    #     "path": "m0",
+    #     "operator": all_elements_not_equal,
+    #     "value": None
+    # },
     {
-        "path": "generate_filter_func",
+        "path": "fit_filter_name",
         "operator": "eq",
+        # "value": "high_entropy"
         "value": "missunderstand"
     }
 
 ]
+conditions = [
+    {
+        "path": "agent",
+        "operator": "eq",
+        "value": "BayesianGaussianMixtureModelWithContext"
+    },
+    {
+        "path": "K",
+        "operator": "eq",
+        "value": 4
+    },
+    {
+        "path": "c_alpha",
+        "operator": all_elements_equal,
+        "value": None
+    },
+    # {
+    #     "path": "c_alpha",
+    #     "operator": is_shape_equal,
+    #     "value": (K,)
+    # }
+    # {
+    #     "path": "iter",
+    #     "operator": "eq",
+    #     "value": 1000
+    # },
+    {
+        "path": "m0",
+        "operator": all_elements_equal,
+        "value": None
+    },
+    {
+        "path": "generate_filter_name",
+        "operator": "eq",
+        # "value": "high_entropy"
+        "value": "none"
+    },
+        {
+        "path": "fit_filter_name",
+        "operator": "eq",
+        # "value": "high_entropy"
+        "value": "none"
+    }
+]
+# 音象徴、恣意性のグラフ
+conditions = [
+    {
+        "path": "agent",
+        "operator": "eq",
+        "value": "BayesianGaussianMixtureModelWithContext"
+    },
+    {
+        "path": "K",
+        "operator": "eq",
+        "value": 8
+    },
+    {
+        "path": "c_alpha",
+        "operator": all_elements_equal,
+        "value": None
+    },
+    # {
+    #     "path": "c_alpha",
+    #     "operator": is_shape_equal,
+    #     "value": (K,)
+    # }
+    # {
+    #     "path": "iter",
+    #     "operator": "eq",
+    #     "value": 1000
+    # },
+    {
+        "path": "m0",
+        "operator": all_elements_not_equal,
+        "value": None
+    },
+    {
+        "path": "beta0",
+        "operator": all_elements_not_equal,
+        "value": None
+    },
+    {
+        "path": "generate_filter_name",
+        "operator": "eq",
+        "value": "missunderstand"
+        # "value": "none"
+    },
+    {
+        "path": "fit_filter_name",
+        "operator": "eq",
+        # "value": "high_entropy"
+        "value": "none"
+    }
+]
+# 音象徴、恣意性のグラフ
+# conditions = [
+#     {
+#         "path": "agent",
+#         "operator": "eq",
+#         "value": "BayesianGaussianMixtureModelWithContext"
+#     },
+#     {
+#         "path": "K",
+#         "operator": "eq",
+#         "value": 4
+#     },
+#     {
+#         "path": "c_alpha",
+#         "operator": all_elements_equal,
+#         "value": None
+#     },
+#     {
+#         'path': 'beta0',
+#         'operator': 'eq',
+#         'value': [1,1,1,1]
+#         # 'value': [10,10,10,10]
+#     }
+# ]
 
 
     # if config mathces, add folder_name to results
@@ -221,7 +345,7 @@ if __name__ == "__main__":
             })
     for i in range(len(configs)):
         parser = argparse.ArgumentParser()
-        parser.add_argument('--print_config', action='store_true')
+        parser.add_argument('-p', '--print_config', action='store_true')
         print_config = parser.parse_args().print_config
         searcher = JsonSearcher(configs[i]['config'])
         # 検索の実行
@@ -237,5 +361,6 @@ if __name__ == "__main__":
                     else:
                         print(f"{key}: {value}")
         
+                print("-------------------------")
 
     

@@ -530,8 +530,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             Whether to show the message on the result.
         '''
         data, excluded_data = source_agent.generate(N, return_excluded_data=True).values()
-        if self.generate_filter is not None:
-            self.excluded_data = excluded_data
+        self.excluded_data = excluded_data
 
         self.history = xr.Dataset({
             'alpha': (['n', 'k'], np.zeros((N, self.K))),  # Changed dimensions to match 2D array
@@ -548,6 +547,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         if self.fit_filter is None and self.track_learning is False:
             self.fit(data, max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message)
         else:
+            excluded_data_list = []
             count = -1
             for i in range(N):
                 while True:
@@ -565,9 +565,11 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                             self.history['W'][i] = self.W
                         break
                     else:
-                        self.excluded_data.append(data.sel(n=count))
-            self.excluded_data = xr.concat(self.excluded_data, dim='n').assign_coords(n=np.arange(len(self.excluded_data)))
-
+                        excluded_data_list.append(data.sel(n=count))
+            if len(excluded_data_list) > 0:
+                self.excluded_data = xr.concat(excluded_data_list, dim='n').assign_coords(n=np.arange(len(excluded_data_list)))
+            else:
+                self.excluded_data = xr.Dataset()
 
     def _e_like_step(self, X, C):
         '''
@@ -678,6 +680,18 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             for k in range(self.K):
                 idx = np.where(z_new[:, k] == 1)[0]
                 if len(idx) > 0:
+
+                    # Validation check
+                    if not np.all(np.isfinite(self.W[k])):
+                        raise ValueError("W must be finite.")
+                    if not np.all(np.isfinite(self.m[k])):
+                        raise ValueError("m must be finite.")
+                    
+                    # Ensure that W is positive definite
+                    min_eig = np.min(np.linalg.eigvals(self.W[k]))
+                    if min_eig < 0:
+                        self.W[k] -= 10 * min_eig * np.eye(self.D)
+
                     X_new[idx] = np.random.multivariate_normal(
                         self.m[k],
                         np.linalg.inv(self.beta[k] * self.W[k]),
@@ -699,17 +713,27 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             )
             
             # フィルタリング処理
+            temp_excluded_data = None
             if self.generate_filter is not None:
                 filtered_index = self.generate_filter(temp_ret_ds, self, self.generate_filter_args)
                 temp_excluded_data = temp_ret_ds.isel(n=~filtered_index)
                 temp_ret_ds = temp_ret_ds.isel(n=filtered_index)
-            
+            if temp_excluded_data is None:
+                temp_excluded_data = xr.Dataset(
+                    {
+                        'X': (['n', 'd'], np.zeros((0, self.D))),
+                        'C': (['n', 'k'], np.zeros((0, self.K))),
+                        'Z': (['n', 'k'], np.zeros((0, self.K))),
+                    },
+                    coords={'n': [], 'd': np.arange(self.D), 'k': np.arange(self.K)}
+                )
             # 条件を満たすサンプルを追加
             if len(temp_ret_ds.X) > 0:
                 temp_n_samples = min(len(temp_ret_ds.X), n_samples - n_filtered_samples)
                 if temp_n_samples > 0:
                     collected_datasets.append(temp_ret_ds.isel(n=slice(0, temp_n_samples)))
-                    excluded_data.append(temp_excluded_data)
+                    if return_excluded_data:
+                        excluded_data.append(temp_excluded_data)
                     n_filtered_samples += temp_n_samples
         
         # すべてのデータセットを結合
@@ -717,25 +741,27 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             final_ds = xr.concat(collected_datasets, dim='n')
             # インデックスを0から始まるように再調整
             final_ds = final_ds.assign_coords(n=np.arange(len(final_ds.n)))
-            final_excluded_data = xr.concat(excluded_data, dim='n')
-            final_excluded_data = final_excluded_data.assign_coords(n=np.arange(len(final_excluded_data.n)))
+            
             if return_excluded_data:
+                if excluded_data:  # Only concatenate if we have excluded data
+                    final_excluded_data = xr.concat(excluded_data, dim='n')
+                    final_excluded_data = final_excluded_data.assign_coords(n=np.arange(len(final_excluded_data.n)))
+                else:  # Create empty dataset if no excluded data
+                    final_excluded_data = xr.Dataset(
+                        {
+                            'X': (['n', 'd'], np.zeros((0, self.D))),
+                            'C': (['n', 'k'], np.zeros((0, self.K))),
+                            'Z': (['n', 'k'], np.zeros((0, self.K))),
+                        },
+                        coords={'n': [], 'd': np.arange(self.D), 'k': np.arange(self.K)}
+                    )
+                
                 return {
                     'data': final_ds,
                     'excluded_data': final_excluded_data
                 }
             else:
-                return final_ds
-        else:
-            # 空のデータセットを返す場合
-            return xr.Dataset(
-                {
-                    'X': (['n', 'd'], np.zeros((0, self.D))),
-                    'C': (['n', 'k'], np.zeros((0, self.K))),
-                    'Z': (['n', 'k'], np.zeros((0, self.K))),
-                },
-                coords={'n': [], 'd': np.arange(self.D), 'k': np.arange(self.K)}
-            )                                                      
+                return final_ds                                               
     
     def predict_proba(self, data):
         '''
