@@ -104,6 +104,7 @@ for folder_name in folder_names:
         "Z":Z,
         "C":C
     })
+print('data_num',len(params_list))
 #plot variance of m
 fig, axs = plt.subplots(1)
 m_list = [params["m"][-1] for params in params_list]
@@ -124,7 +125,6 @@ for i in range(K):
 # for bar, color in zip(bars, cluster_colors):
 #     bar.set_color(color)
 cluster_colors = generate_double_gradation(K)
-print(cluster_colors)
 axs.bar(range(1, 1+len(std_m)), std_m, color=cluster_colors, alpha = 0.8)
 axs.set_title('Standard Deviation of Mean')
 axs.set_xlabel('Dimension')
@@ -152,3 +152,77 @@ axs.set_ylabel('Mean Standard Deviation')
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "mean_variance_even_odd.png"))
 plt.close(fig)
+
+# plot final generation mean
+fig, axs = plt.subplots()
+m_list = [params["m"][-1] for params in params_list]
+m_array = np.array(m_list)
+K = m_array.shape[1]    
+cluster_colors = generate_double_gradation(K)
+axs.set_xlim(-30, 30)
+axs.set_ylim(-30, 30)
+for i in range(K):
+    axs.scatter(config["m0"][i][0], config["m0"][i][1], color=cluster_colors[i], marker='x',  alpha=1, label=f'Initial {i+1}')
+    axs.scatter(m_array[:, i, 0], m_array[:, i, 1], color=cluster_colors[i],s=5, alpha=0.8, label=f'Cluster {i+1}')
+axs.set_title('Final Generation Mean')
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, "final_generation_mean.png"))
+plt.close(fig)
+
+fig, axs = plt.subplots()
+m_list = [params["m"][-1] for params in params_list]
+m_array = np.array(m_list)
+K = m_array.shape[1]    
+cluster_colors = generate_double_gradation(K)
+axs.set_xlim(-30, 30)
+axs.set_ylim(-30, 30)
+for i in range(K):
+    axs.scatter(config["m0"][i][0], config["m0"][i][1], color=cluster_colors[i], marker='x',  alpha=1, label=f'Initial {i+1}')
+    axs.scatter(m_array[:, i, 0], m_array[:, i, 1], color=cluster_colors[i],s=5, alpha=0.8, label=f'Cluster {i+1}')
+# Draw lines from initial means (m0) to final means for all clusters
+for i in range(K):
+    for j in range(len(m_array)):
+        axs.plot([config["m0"][i][0], m_array[j,i,0]], 
+                 [config["m0"][i][1], m_array[j,i,1]], 
+                 color=cluster_colors[i], alpha=0.4, linewidth=0.5)
+axs.set_title('Final Generation Mean')
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, "final_generation_mean_with_arrow.png"))
+plt.close(fig)
+
+# histogram of distance between m0 and m
+fig, axs = plt.subplots()
+m_list = [params["m"][-1] for params in params_list]
+m_array = np.array(m_list)
+K = m_array.shape[1]
+cluster_colors = generate_double_gradation(K)
+distance = np.linalg.norm(m_array - np.array(config["m0"]), axis=2)
+distance = np.concatenate([distance[:,::2], distance[:,1::2]], axis=1)
+
+# Calculate histograms manually for both clusters
+bins = 20
+range_min = np.min(distance)
+range_max = np.max(distance)
+bin_edges = np.linspace(range_min, range_max, bins + 1)
+bin_width = (range_max - range_min) / bins
+bar_width = bin_width * 0.35  # Make bars narrower to fit side by side
+labels = ['Sound Symbolic Words', 'Non-Sound Symbolic Words']
+for i in range(2):
+    hist, _ = np.histogram(distance[:, i], bins=bin_edges)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    
+    # Offset the bars for each cluster
+    offset = (i - 0.5) * bar_width
+    axs.bar(bin_centers + offset, hist, width=bar_width, 
+            color=cluster_colors[len(cluster_colors)//2+i], alpha=1.0, 
+            label=labels[i])
+
+axs.set_title('Distance between Initial and Final Generation Mean (Even/Odd)')
+axs.set_xlabel('Distance')
+axs.set_ylabel('Frequency')
+axs.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, "distance_m0_m.png"))
+plt.close(fig)
+
+
