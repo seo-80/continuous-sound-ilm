@@ -496,6 +496,17 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
 
             lower_bound_prev = lower_bound
             lower_bound = self._calc_lower_bound(r)
+            # Check if W is diverging
+            for k in range(self.K):
+                if not np.all(np.isfinite(self.W[k])):
+                    print(f"Warning: W[{k}] contains non-finite values")
+                    self._init_params(self.X, random_state=random_state)
+                
+                # Check eigenvalues to detect numerical instability
+                eigvals = np.linalg.eigvals(self.W[k])
+                if np.any(eigvals > 1e10) or np.any(eigvals < -1e10):
+                    print(f"Warning: W[{k}] has very large eigenvalues indicating potential divergence")
+                    self._init_params(self.X, random_state=random_state)
             if abs(lower_bound - lower_bound_prev) < tol:
                 break
 
@@ -555,7 +566,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     if count >= N:
                         count = 0
                         data = source_agent.generate(N)
-
+                    self._init_params(random_state=random_state)
                     if self.fit(data.sel(n=count), max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message):
                         if self.track_learning:
                             self.history['alpha'][i] = self.alpha
@@ -697,8 +708,6 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                         np.linalg.inv(self.beta[k] * self.W[k]),
                         size=len(idx)
                     )
-            
-            # バッチデータセットの作成
             temp_ret_ds = xr.Dataset(
                 {
                     'X': (['n', 'd'], X_new),

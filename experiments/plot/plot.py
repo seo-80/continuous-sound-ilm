@@ -89,6 +89,22 @@ def generate_double_gradation(n):
         colors.append(color)
     
     return colors
+def generate_gradation(n, base_color):
+    colors = []
+    if base_color == "red":
+        start_color = (1.0, 0.0, 0.0)  # Red in RGB
+        end_color = (1.0, 0.8, 0.0)   # Orange in RGB
+    elif base_color == "blue":
+        start_color = (0.0, 0.0, 1.0)
+        end_color = (0.0, 0.8, 1.0)
+
+    for i in range(n):
+        t = i / (n-1)
+        color = tuple(start_color[j] + (end_color[j] - start_color[j]) * t for j in range(3))
+        colors.append(color)
+    
+    return colors
+
 
 matched_data = []  
 if folder_name == 'all':
@@ -143,7 +159,7 @@ for folder_name in folder_names:
             
 
         iter = params["m"].shape[0]
-        # cluster_colors = generate_colors(K)
+        cluster_colors = generate_colors(K)
         # cluster_colors = plt.cm.tab20b(np.linspace(0, 1, K))
         # cluster_colors = []
         # for i in range(K):
@@ -154,6 +170,7 @@ for folder_name in folder_names:
         #         # cluster_colors.append('orange')
         #         cluster_colors.append(plt.cm.tab20c(4+i//2))
         cluster_colors = generate_double_gradation(K)
+        # cluster_colors = generate_gradation(K, "red")
 
         if os.path.exists(DATA_DIR+folder_name+"/history.nc"):
             history_m = xr.open_dataset(DATA_DIR+folder_name+"/history.nc", drop_variables=list(params.keys() - {"m"}))
@@ -171,8 +188,9 @@ for folder_name in folder_names:
 
             # plot animation of learning process of last generation
             fig, axs = plt.subplots()
-            last_generation_history = xr.open_dataset(DATA_DIR+folder_name+"/history.nc").sel(iter=99)
+            last_generation_history = xr.open_dataset(DATA_DIR+folder_name+"/history.nc").sel(iter=1)
             print(last_generation_history)
+            plt.gca().set_aspect('equal')
             def update(i):
                 axs.clear()
                 artists = []
@@ -190,8 +208,10 @@ for folder_name in folder_names:
                     matrix = (last_generation_history["beta"][i][k].values * 
                                 last_generation_history["W"][i][k, :, :].values)
                     covar = np.linalg.inv(matrix)
-                    axs.set_xlim(-30, 30)
-                    axs.set_ylim(-30, 30)
+                    # axs.set_xlim(-30, 30)
+                    # axs.set_ylim(-30, 30)
+                    axs.set_xlim(x_lim)
+                    axs.set_ylim(y_lim)
                     x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
                     xy = np.column_stack([x.flat, y.flat])
                     z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
@@ -220,12 +240,12 @@ for folder_name in folder_names:
 
                 return artists
             # Create animation
-            anim = animation.FuncAnimation(fig, update, frames=len(params["m"]), interval=50, blit=True)
+            anim = animation.FuncAnimation(fig, update, frames=len(last_generation_history['m']), interval=50, blit=True)
             
             # Save animation
             anim.save(os.path.join(DATA_DIR, folder_name, "learning_animation.gif"), writer='pillow')
             plt.close(fig)
-        
+            print('last_gen',len(last_generation_history))
 
         # Create a list of alternating blue and orange colors
         
@@ -335,6 +355,7 @@ for folder_name in folder_names:
 
         # Plot the trajectory of params["m"] in 2D space with color gradient
         fig, axs = plt.subplots()
+        plt.gca().set_aspect('equal')
         def update(i):
             axs.clear()
             artists = []
@@ -372,6 +393,7 @@ for folder_name in folder_names:
         ani.save(DATA_DIR+folder_name+"/animation.gif", writer="pillow")
         # plt.show()
         fig, axs = plt.subplots()
+        plt.gca().set_aspect('equal')
         def update(i):
             axs.clear()
             artists = []
@@ -423,35 +445,56 @@ for folder_name in folder_names:
 
             return artists
 
-        # ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
-        # ani.save(DATA_DIR+folder_name+"/animation_colored_with_z.gif", writer="pillow")
-        # fig, axs = plt.subplots()
-        # def update(i):
-        #     axs.clear()
-        #     artists = []
+        ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
+        ani.save(DATA_DIR+folder_name+"/animation_colored_with_Z_arrow.gif", writer="pillow")
 
-        #     fake_z = np.argmax(C[i], axis=1)
-        #     for z in range(K):
-        #         X_with_z = X[i][fake_z == z]
-        #         scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
-        #     artists.append(scatter)
+        fig, axs = plt.subplots()
+        plt.gca().set_aspect('equal')
+        def update(i):
+            axs.clear()
+            artists = []
 
-        #     for k in range(K):
-        #         mean = params["m"][i, k]
-        #         matrix = params["beta"][i, k] * params["W"][i, k, :, :]
-        #         covar = np.linalg.inv(matrix)
-        #         axs.set_xlim(x_lim)
-        #         axs.set_ylim(y_lim)
-        #         x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
-        #         xy = np.column_stack([x.flat, y.flat])
-        #         z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
+            fake_z = np.argmax(Z[i], axis=1)
+            for z in range(K):
+                X_with_z = X[i][fake_z == z]
+                scatter = axs.scatter(X_with_z[:, 0], X_with_z[:, 1], c=[cluster_colors[z]], s=2, alpha=0.5)
+            artists.append(scatter)
 
-        #         rv = multivariate_normal(mean, covar)
-        #         level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
-        #         contour = axs.contour(x, y, z, alpha=0.5, levels=[level], colors=[cluster_colors[k]])
-        #         artists.append(contour)
-        #     axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
+            for k in range(K):
+                mean = params["m"][i, k]
+                matrix = params["beta"][i, k] * params["W"][i, k, :, :]
+                covar = np.linalg.inv(matrix)
+                # axs.set_xlim(x_lim)
+                # axs.set_ylim(y_lim)
+                axs.set_xlim(-30, 30)
+                axs.set_ylim(-30, 30)
+                x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
+                xy = np.column_stack([x.flat, y.flat])
+                z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
+                rv = multivariate_normal(mean, covar)
+                level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+                
+                contour = axs.contour(x, y, z, levels=[level], colors=[cluster_colors[k]])
+                artists.append(contour)
+                contourf = axs.contourf(x, y, z, levels=[level,1], colors=[cluster_colors[k]], alpha=0.15)
+                artists.append(contourf)
+            
+            # # 事前分布中心から学習後の中心までの矢印を描画
+            # for k in range(K):
+            #     prior_mean = temp_config["m0"][k]
+            #     marker = axs.scatter(prior_mean[0], prior_mean[1], marker='x', color=cluster_colors[k])
+            #     artists.append(marker)
+            #     learned_mean = params["m"][i, k]
+            #     arrow = axs.arrow(prior_mean[0], prior_mean[1], 
+            #                       learned_mean[0] - prior_mean[0], 
+            #                       learned_mean[1] - prior_mean[1], 
+            #                       head_width=0.8, head_length=0.8, 
+            #                       fc=cluster_colors[k], ec=cluster_colors[k])
+            #     artists.append(arrow)
+
+
+            # axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
 
             # plt.tight_layout()
@@ -459,7 +502,7 @@ for folder_name in folder_names:
             return artists
 
         ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
-        ani.save(DATA_DIR+folder_name+"/animation_colored_with_C.gif", writer="pillow")
+        ani.save(DATA_DIR+folder_name+"/animation_colored_with_Z.gif", writer="pillow")
 
 
         

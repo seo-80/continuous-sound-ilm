@@ -207,29 +207,41 @@ conditions = [
     }
 ]
 # 音象徴、恣意性のグラフ
-# conditions = [
-#     {
-#         "path": "agent",
-#         "operator": "eq",
-#         "value": "BayesianGaussianMixtureModelWithContext"
-#     },
-#     {
-#         "path": "K",
-#         "operator": "eq",
-#         "value": 4
-#     },
-#     {
-#         "path": "c_alpha",
-#         "operator": all_elements_equal,
-#         "value": None
-#     },
-#     {
-#         'path': 'beta0',
-#         'operator': 'eq',
-#         'value': [1,1,1,1]
-#         # 'value': [10,10,10,10]
-#     }
-# ]
+conditions = [
+    {
+        "path": "agent",
+        "operator": "eq",
+        "value": "BayesianGaussianMixtureModelWithContext"
+    },
+    {
+        "path": "K",
+        "operator": "eq",
+        "value": 4
+    },
+    {
+        "path": "c_alpha",
+        "operator": all_elements_equal,
+        "value": None
+    },
+    # {
+    #     'path': 'beta0',
+    #     'operator': 'eq',
+    #     # 'value': [1,1,1,1]
+    #     'value': [10,10,10,10]
+    # }
+    {
+        "path": "generate_filter_name",
+        "operator": "eq",
+        "value": "none"
+        # "value": "none"
+    },
+    {
+        "path": "fit_filter_name",
+        "operator": "eq",
+        # "value": "high_entropy"
+        "value": "none"
+    }
+]
 
 
     # if config mathces, add folder_name to results

@@ -30,7 +30,10 @@ regerence_folder_name = parser.parse_args().folder_name
 folder_names = os.listdir(DATA_DIR)
 
 if regerence_folder_name is not None:
-    config = json.load(open(DATA_DIR+regerence_folder_name+"/config.json"))
+    if os.path.exists(DATA_DIR+regerence_folder_name+"/config.json"):
+        config = json.load(open(DATA_DIR+regerence_folder_name+"/config.json"))
+    elif os.path.exists(OUTPUT_DIR+regerence_folder_name+"/config.json"):
+        config = json.load(open(OUTPUT_DIR+regerence_folder_name+"/config.json"))
 
 existing_folder_names = os.listdir(OUTPUT_DIR)
 create_new_folder = True
@@ -161,6 +164,7 @@ K = m_array.shape[1]
 cluster_colors = generate_double_gradation(K)
 axs.set_xlim(-30, 30)
 axs.set_ylim(-30, 30)
+plt.gca().set_aspect('equal')
 for i in range(K):
     axs.scatter(config["m0"][i][0], config["m0"][i][1], color=cluster_colors[i], marker='x',  alpha=1, label=f'Initial {i+1}')
     axs.scatter(m_array[:, i, 0], m_array[:, i, 1], color=cluster_colors[i],s=5, alpha=0.8, label=f'Cluster {i+1}')
@@ -169,13 +173,34 @@ plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "final_generation_mean.png"))
 plt.close(fig)
 
+# plot mean of final generation mean 
 fig, axs = plt.subplots()
-m_list = [params["m"][-1] for params in params_list]
-m_array = np.array(m_list)
-K = m_array.shape[1]    
-cluster_colors = generate_double_gradation(K)
+mean_m = np.mean(m_array, axis=0)
 axs.set_xlim(-30, 30)
 axs.set_ylim(-30, 30)
+plt.gca().set_aspect('equal')
+for i in range(K):
+    axs.scatter(config["m0"][i][0], config["m0"][i][1], color=cluster_colors[i], marker='x',  alpha=1, label=f'Initial {i+1}')
+    axs.scatter(mean_m[i, 0], mean_m[i, 1], color=cluster_colors[i],s=5, alpha=0.8, label=f'Cluster {i+1}')
+# Draw arrows from initial means (m0) to mean final means
+for i in range(K):
+    axs.arrow(config["m0"][i][0], config["m0"][i][1],
+              mean_m[i,0] - config["m0"][i][0],
+              mean_m[i,1] - config["m0"][i][1],
+              head_width=0.8, head_length=0.8,
+              fc=cluster_colors[i], ec=cluster_colors[i],
+              alpha=0.8)
+axs.set_title('Mean of Final Generation Mean')
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, "mean_final_generation_mean.png"))
+plt.close(fig)
+
+
+
+fig, axs = plt.subplots()
+axs.set_xlim(-30, 30)
+axs.set_ylim(-30, 30)
+plt.gca().set_aspect('equal')
 for i in range(K):
     axs.scatter(config["m0"][i][0], config["m0"][i][1], color=cluster_colors[i], marker='x',  alpha=1, label=f'Initial {i+1}')
     axs.scatter(m_array[:, i, 0], m_array[:, i, 1], color=cluster_colors[i],s=5, alpha=0.8, label=f'Cluster {i+1}')
@@ -225,4 +250,73 @@ plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "distance_m0_m.png"))
 plt.close(fig)
 
+# Plot histogram of distance between (0,0) and m for all clusters
+fig, axs = plt.subplots()
+distance = np.linalg.norm(m_array - np.array(config["m0"]), axis=2)
+for i in range(len(m_array)):
+    # Calculate distance from origin for each mean
+    origin_dist = np.linalg.norm(m_array[i], axis=1)
+    # Invert distance values for means inside radius 10 circle
+    inside_circle = origin_dist <= 10
+    distance[i, inside_circle] = -distance[i, inside_circle]
+distance = np.concatenate([distance[:,::2], distance[:,1::2]], axis=1)
+distance = distance - np.linalg.norm(np.array(config["m0"]), axis=1)
+bins = 20
+range_min = np.min(distance)
+range_max = np.max(distance)
+bin_edges = np.linspace(range_min, range_max, bins + 1)
+bin_width = (range_max - range_min) / bins
+bar_width = bin_width * 0.35  # Make bars narrower to fit side by side
+labels = ['Sound Symbolic Words', 'Non-Sound Symbolic Words']
+for i in range(2):
+    hist, _ = np.histogram(distance[:, i], bins=bin_edges)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    
+    # Offset the bars for each cluster
+    offset = (i - 0.5) * bar_width
+    axs.bar(bin_centers + offset, hist, width=bar_width, 
+            color=cluster_colors[len(cluster_colors)//2+i], alpha=1.0, 
+            label=labels[i])
 
+axs.set_title('Distance between (0,0) and Final Generation Mean (Even/Odd)')
+axs.set_xlabel('Distance')
+axs.set_ylabel('Frequency')
+axs.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, "distance_m_inv.png"))
+plt.close(fig)
+# 上の二つの図を合わせたもの
+fig, axs = plt.subplots()
+axs.set_xlim(-30, 30)
+axs.set_ylim(-30, 30)
+plt.gca().set_aspect('equal')
+mean_m = np.mean(m_array, axis=0)
+cov_m = np.array([np.cov(m_array[i, :, 0], m_array[i, :, 1]) for i in range(K)])
+for i in range(K):
+    axs.scatter(config["m0"][i][0], config["m0"][i][1], color=cluster_colors[i], marker='x',  alpha=1, label=f'Initial {i+1}')
+    axs.scatter(m_array[:, i, 0], m_array[:, i, 1], color=cluster_colors[i],s=5, alpha=0.2, label=f'Cluster {i+1}')
+    # for j in range(len(m_array)):
+    #     axs.plot([config["m0"][i][0], m_array[j,i,0]], 
+    #              [config["m0"][i][1], m_array[j,i,1]], 
+    #              color=cluster_colors[i], alpha=0.6, linewidth=0.2)
+# Draw circles for 1 standard deviation
+for i in range(K):
+    x, y = np.meshgrid(np.linspace(-30, 30, 100), np.linspace(-30, 30, 100))
+    xy = np.column_stack([x.flat, y.flat])
+    z = multivariate_normal.pdf(xy, mean=mean_m[i], cov=cov_m[i]).reshape(x.shape)
+
+    rv = multivariate_normal(mean_m[i], cov_m[i])
+    level = rv.pdf(mean_m[i]) * np.exp(-0.5 * (np.sqrt(2/10)) ** 2)
+    levels = [level]
+    contour = axs.contour(x, y, z, levels=levels, colors=[cluster_colors[i]])
+    contourf = axs.contourf(x, y, z, levels=[level,1], colors=[cluster_colors[i]], alpha=0.2)
+for i in range(K):
+    axs.arrow(config["m0"][i][0], config["m0"][i][1],
+              mean_m[i,0] - config["m0"][i][0],
+              mean_m[i,1] - config["m0"][i][1],
+              head_width=0.8, head_length=0.8,
+              fc=cluster_colors[i], ec=cluster_colors[i],
+              alpha=0.8)
+axs.set_title('Final Generation Mean')
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, "final_generation_mean_with_arrow_and_distance_with_count.png"))

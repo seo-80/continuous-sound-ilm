@@ -36,15 +36,15 @@ class ExperimentConfig:
     def create_default_config(cls) -> 'ExperimentConfig':
         K = 4
         D = 2
-        N = 1000
+        N = 500
         
         # Default parameters
         c_alpha = np.array([1/K for _ in range(K)])
         alpha0 = 100.0
         # beta0 = np.array([1 if i%2 ==0 else 0.01 for i in range(K)])
-        beta0 = np.array([9 for i in range(K)])
+        beta0 = np.array([0.1 for i in range(K)])
         nu0 = D + 2.0
-        m0_range = 10
+        m0_range = 0
         m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
         # m0 = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
         W0 = np.eye(D)*0.02
@@ -54,7 +54,7 @@ class ExperimentConfig:
             agent="BayesianGaussianMixtureModelWithContext",
             alpha0=alpha0, beta0=beta0, nu0=nu0,
             c_alpha=c_alpha, m0=m0, W0=W0,
-            iter=100,
+            iter=2,
             fit_filter_name="none",
             generate_filter_name="missunderstand",
             fit_filter_args={},
@@ -96,6 +96,13 @@ class ExperimentConfig:
             config["W0"] = np.array(config["W0"])
         if isinstance(config["c_alpha"], list):
             config["c_alpha"] = np.array(config["c_alpha"])
+        m0_range = 5
+        K = config["K"]
+        m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
+        # m0 = np.array([[4,5],[4,-5],[2,5],[2,-5],[0,5],[0,-5],[-2,5],[-2,-5]])
+        config["m0"] = m0
+        beta0 = np.array([10 if i%2 ==0 else 0.01 for i in range(K)])
+        config["beta0"] = beta0
         ret_config = cls(
             K=config["K"],
             D=config["D"],
@@ -156,19 +163,40 @@ class ExperimentManager:
 
     def generate_initial_data(self) -> tuple:
         """初期データの生成"""
-        np.random.seed(0)
-        X_0 = np.zeros((self.config.N, self.config.D))
-        C_0 = np.random.dirichlet(self.config.true_alpha, size=self.config.N)
+        # np.random.seed(0)
+        true_K = 4
+        true_means = np.array([[4, 5], [3.4, -6], [-8, 5], [-3, -7]])
+        true_covars = np.array([np.eye(2) * 0.1 for _ in range(true_K)])
+        true_alpha = np.array([1, 1, 1, 1])
+        N=500
+        D=2
+
+
+        X_0 = np.zeros((N, D))
+        C_0 = np.random.dirichlet(true_alpha, size=N)
         z_0 = np.array([np.random.multinomial(1, c) for c in C_0])
         
-        for k in range(self.config.true_K):
+        for k in range(true_K):
             X_0[z_0[:, k] == 1] = np.random.multivariate_normal(
-                self.config.true_means[k],
-                self.config.true_covars[k],
+                true_means[k],
+                true_covars[k],
                 size=np.sum(z_0[:, k] == 1)
             )
+        initial_data = xr.Dataset(
+            {
+                'X': (['n', 'd'], X_0),
+                'C': (['n', 'k'], C_0),
+                'Z': (['n', 'k'], z_0)
+            },
+            coords={
+                'n': np.arange(self.config.N),
+                'd': np.arange(self.config.D),
+                'k': np.arange(self.config.K)
+            }
+        )
+        
             
-        return X_0, C_0, z_0
+        return initial_data
 
     def create_agent(self, is_parent: bool = False) -> Any:
         """エージェントの作成"""
@@ -219,6 +247,8 @@ class ExperimentManager:
         np.random.seed(random_seed)
 
         parent_agent = self.create_agent()
+        # data = self.generate_initial_data()
+        # parent_agent.fit(data, max_iter=1000, tol=1e-6)
 
         for i in tqdm.tqdm(range(self.config.iter)):
             child_agent = self.create_agent()
@@ -281,9 +311,11 @@ def main(folder_name: str):
         config = ExperimentConfig.create_default_config()
     
     # 実験の実行
-    experiment = ExperimentManager(config, DATA_DIR,track_learning=True)
+    # experiment = ExperimentManager(config, DATA_DIR,track_learning=True)
+    experiment = ExperimentManager(config, DATA_DIR)
     experiment.run_experiment()
     experiment.save_results()
+    print(experiment.save_path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
