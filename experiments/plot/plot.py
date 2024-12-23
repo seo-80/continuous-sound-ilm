@@ -26,10 +26,12 @@ parser = argparse.ArgumentParser(description='Process some data.')
 parser.add_argument('folder_name',nargs="?" , type=str, default="all", help='input file path')
 parser.add_argument('--remake_all', action='store_true')
 parser.add_argument('--latest', action='store_true')
+parser.add_argument('--plot_only_last', action='store_true')
 
 folder_name = parser.parse_args().folder_name
 remake_all = parser.parse_args().remake_all
 latest = parser.parse_args().latest
+
 
 if latest and remake_all:
     print("latest and remake_all are exclusive")
@@ -131,7 +133,7 @@ for folder_name in folder_names:
         Z = np.load(DATA_DIR+folder_name+"/Z.npy")
         C = np.load(DATA_DIR+folder_name+"/context.npy")
         K = temp_config["K"]
-        
+        excluded_data = None
         if os.path.exists(DATA_DIR+folder_name+"/excluded_data.nc"):
             try:
                 excluded_data = xr.open_dataset(DATA_DIR+folder_name+"/excluded_data.nc")
@@ -155,6 +157,8 @@ for folder_name in folder_names:
         lim = np.ceil(lim / 10) * 10
         x_lim = (-lim, lim)
         y_lim = (-lim, lim)
+        x_lim = (-30, 30)
+        y_lim = (-30, 30)
 
             
 
@@ -169,8 +173,12 @@ for folder_name in folder_names:
         #     else:
         #         # cluster_colors.append('orange')
         #         cluster_colors.append(plt.cm.tab20c(4+i//2))
-        cluster_colors = generate_double_gradation(K)
-        # cluster_colors = generate_gradation(K, "red")
+        if K ==8:   
+            cluster_colors = generate_double_gradation(K)
+        else:
+            cluster_colors = generate_colors(K)
+        # cluster_colors = generate_gradation(K, "blue")
+
 
         if os.path.exists(DATA_DIR+folder_name+"/history.nc"):
             history_m = xr.open_dataset(DATA_DIR+folder_name+"/history.nc", drop_variables=list(params.keys() - {"m"}))
@@ -188,7 +196,8 @@ for folder_name in folder_names:
 
             # plot animation of learning process of last generation
             fig, axs = plt.subplots()
-            last_generation_history = xr.open_dataset(DATA_DIR+folder_name+"/history.nc").sel(iter=1)
+            iter = len(history_m['m'])
+            last_generation_history = xr.open_dataset(DATA_DIR+folder_name+"/history.nc").sel(iter=iter-1)
             print(last_generation_history)
             plt.gca().set_aspect('equal')
             def update(i):
@@ -208,8 +217,6 @@ for folder_name in folder_names:
                     matrix = (last_generation_history["beta"][i][k].values * 
                                 last_generation_history["W"][i][k, :, :].values)
                     covar = np.linalg.inv(matrix)
-                    # axs.set_xlim(-30, 30)
-                    # axs.set_ylim(-30, 30)
                     axs.set_xlim(x_lim)
                     axs.set_ylim(y_lim)
                     x, y = np.meshgrid(np.linspace(*x_lim, 100), np.linspace(*y_lim, 100))
@@ -217,8 +224,7 @@ for folder_name in folder_names:
                     z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
                     rv = multivariate_normal(mean, covar)
-                    level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
-                    # levels = level * np.linspace(0, 5, 10)
+                    level = rv.pdf(mean) * np.exp(-0.5 * (1) ** 2)
                     levels = [level]
                     contour = axs.contour(x, y, z, levels=levels, colors=[cluster_colors[k]])
                     artists.append(contour)
@@ -236,10 +242,9 @@ for folder_name in folder_names:
                                     learned_mean[1] - prior_mean[1], 
                                     head_width=0.8, head_length=0.8, 
                                     fc=cluster_colors[k], ec=cluster_colors[k])
-                    artists.append(arrow)
-
+                    # artists.append(arrow)
+                plt.tight_layout()
                 return artists
-            # Create animation
             anim = animation.FuncAnimation(fig, update, frames=len(last_generation_history['m']), interval=50, blit=True)
             
             # Save animation
@@ -258,7 +263,7 @@ for folder_name in folder_names:
         axs.set_xticks(range(1, K+1))
         axs.set_xticklabels([f"Cluster {k+1}" for k in range(K)])
         axs.set_ylabel("Mean Step Difference")
-        axs.set_title("Mean Step Differences by Cluster")
+        # axs.set_title("Mean Step Differences by Cluster")
         plt.tight_layout() 
         plt.savefig(os.path.join(DATA_DIR, folder_name, "mean_step_diff.png"))
         plt.close(fig)
@@ -272,7 +277,7 @@ for folder_name in folder_names:
         axs.set_xticks(range(1, K+1))
         axs.set_xticklabels([f"Cluster {k+1}" for k in range(K)])
         axs.set_ylabel("Standard Deviation of Mean")
-        axs.set_title("Standard Deviation of Mean by Cluster")
+        # axs.set_title("Standard Deviation of Mean by Cluster")
         plt.tight_layout()
         plt.savefig(os.path.join(DATA_DIR, folder_name, "std_m.png"))
 
@@ -379,15 +384,15 @@ for folder_name in folder_names:
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
                 rv = multivariate_normal(mean, covar)
-                level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+                level = rv.pdf(mean) * np.exp(-0.5 * (1) ** 2)
                 contour = axs.contour(x, y, z, alpha=0.5, levels=[level])
                 artists.append(contour)
 
             # axs.set_title(f"iteration {i}")
 
-            # plt.tight_layout()
+            # plt.tight_layout( )
 
-            return artists
+            return artists                              
 
         ani = animation.FuncAnimation(fig, update, frames=iter, interval=500, blit=True)
         ani.save(DATA_DIR+folder_name+"/animation.gif", writer="pillow")
@@ -417,7 +422,7 @@ for folder_name in folder_names:
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
                 rv = multivariate_normal(mean, covar)
-                level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+                level = rv.pdf(mean) * np.exp(-0.5 * (1) ** 2)
                 
                 contour = axs.contour(x, y, z, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
@@ -441,7 +446,7 @@ for folder_name in folder_names:
             # axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
 
-            # plt.tight_layout()
+            plt.tight_layout()
 
             return artists
 
@@ -473,7 +478,7 @@ for folder_name in folder_names:
                 z = multivariate_normal.pdf(xy, mean=mean, cov=covar).reshape(x.shape)
 
                 rv = multivariate_normal(mean, covar)
-                level = rv.pdf(mean) * np.exp(-0.5 * (np.sqrt(2)) ** 2)
+                level = rv.pdf(mean) * np.exp(-0.5 * (1) ** 2)
                 
                 contour = axs.contour(x, y, z, levels=[level], colors=[cluster_colors[k]])
                 artists.append(contour)
@@ -497,7 +502,7 @@ for folder_name in folder_names:
             # axs.legend([f'Cluster {i+1}' for i in range(K)], loc='upper right')
             # axs.set_title(f"iteration {i}")
 
-            # plt.tight_layout()
+            plt.tight_layout()
 
             return artists
 

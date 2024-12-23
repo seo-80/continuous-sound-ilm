@@ -96,13 +96,20 @@ class ExperimentConfig:
             config["W0"] = np.array(config["W0"])
         if isinstance(config["c_alpha"], list):
             config["c_alpha"] = np.array(config["c_alpha"])
+
+        # !応急処置 configの修正
         m0_range = 5
         K = config["K"]
         m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
-        # m0 = np.array([[4,5],[4,-5],[2,5],[2,-5],[0,5],[0,-5],[-2,5],[-2,-5]])
+        # # # m0 = np.array([[4,5],[4,-5],[2,5],[2,-5],[0,5],[0,-5],[-2,5],[-2,-5]])
         config["m0"] = m0
-        beta0 = np.array([10 if i%2 ==0 else 0.01 for i in range(K)])
-        config["beta0"] = beta0
+        # beta0 = np.array([10 if i%2 ==0 else 1 for i in range(K)])
+        # config["beta0"] = beta0
+        # beta0 = np.array([10 for i in range(config["K"    ])])
+        # config["beta0"] = beta0
+        # config['generate_filter_name'] = "missunderstand"
+        config['iter'] = 1000
+
         ret_config = cls(
             K=config["K"],
             D=config["D"],
@@ -129,6 +136,7 @@ class ExperimentManager:
         self.save_dir = save_dir
         self.setup_data_directory()
         self.track_learning = track_learning
+        print(config)
         
         # Initialize storage for results
         self.params = {
@@ -164,11 +172,11 @@ class ExperimentManager:
     def generate_initial_data(self) -> tuple:
         """初期データの生成"""
         # np.random.seed(0)
-        true_K = 4
-        true_means = np.array([[4, 5], [3.4, -6], [-8, 5], [-3, -7]])
+        true_K = self.config.K
+        true_means = self.config.m0
         true_covars = np.array([np.eye(2) * 0.1 for _ in range(true_K)])
-        true_alpha = np.array([1, 1, 1, 1])
-        N=500
+        true_alpha = np.array([1 for _ in range(true_K)])
+        N=self.config.N
         D=2
 
 
@@ -189,7 +197,7 @@ class ExperimentManager:
                 'Z': (['n', 'k'], z_0)
             },
             coords={
-                'n': np.arange(self.config.N),
+                'n': np.arange(N),
                 'd': np.arange(self.config.D),
                 'k': np.arange(self.config.K)
             }
@@ -198,7 +206,7 @@ class ExperimentManager:
             
         return initial_data
 
-    def create_agent(self, is_parent: bool = False) -> Any:
+    def create_agent(self, is_parent: bool = False, track_learning: bool = False) -> Any:
         """エージェントの作成"""
         if self.config.agent == "BayesianGaussianMixtureModelWithContext":
             return BayesianGaussianMixtureModelWithContext(
@@ -210,9 +218,9 @@ class ExperimentManager:
                 fit_filter_args=self.config.fit_filter_args,
                 generate_filter="none" if is_parent else self.config.generate_filter_name,
                 generate_filter_args=self.config.generate_filter_args,
-                track_learning=self.track_learning
+                track_learning=track_learning
             )
-        else:
+        elif self.config.agent == "BayesianGaussianMixtureModel":
             return BayesianGaussianMixtureModel(
                 self.config.K, self.config.D,
                 self.config.alpha0, self.config.beta0,
@@ -247,11 +255,10 @@ class ExperimentManager:
         np.random.seed(random_seed)
 
         parent_agent = self.create_agent()
-        # data = self.generate_initial_data()
-        # parent_agent.fit(data, max_iter=1000, tol=1e-6)
+
 
         for i in tqdm.tqdm(range(self.config.iter)):
-            child_agent = self.create_agent()
+            child_agent = self.create_agent(track_learning= (i == self.config.iter-1) if self.track_learning == "Final" else self.track_learning)
             retry_count = []
             child_agent.fit_from_agent(parent_agent, N=self.config.N)
             
@@ -268,7 +275,7 @@ class ExperimentManager:
             self.params["m"][i] = child_agent.m
             self.params["W"][i] = child_agent.W
             self.excluded_data.append(child_agent.excluded_data)
-            if self.track_learning:
+            if self.track_learning is True or self.track_learning == "Final":
                 self.history['alpha'][i] = child_agent.history['alpha']
                 self.history['beta'][i] = child_agent.history['beta']
                 self.history['nu'][i] = child_agent.history['nu']
@@ -288,9 +295,12 @@ class ExperimentManager:
         np.save(os.path.join(self.save_path, "params.npy"), self.params)
         # save excluded data
         print(self.excluded_data)
-        excluded_data_combined = xr.concat(self.excluded_data, dim='iter')
-        print(excluded_data_combined)
-        excluded_data_combined.to_netcdf(os.path.join(self.save_path, "excluded_data.nc"))
+        try:
+            excluded_data_combined = xr.concat(self.excluded_data, dim='iter')
+            print(excluded_data_combined)
+            excluded_data_combined.to_netcdf(os.path.join(self.save_path, "excluded_data.nc"))
+        except:
+            print("error")
         
         # Convert config to JSON-serializable format
         config_dict = {k: v.tolist() if isinstance(v, np.ndarray) else v 
@@ -310,8 +320,9 @@ def main(folder_name: str):
     else:
         config = ExperimentConfig.create_default_config()
     
-    # 実験の実行
+    # # 実験の実行
     # experiment = ExperimentManager(config, DATA_DIR,track_learning=True)
+    experiment = ExperimentManager(config, DATA_DIR,track_learning="Final")
     experiment = ExperimentManager(config, DATA_DIR)
     experiment.run_experiment()
     experiment.save_results()

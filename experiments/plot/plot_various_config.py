@@ -56,8 +56,12 @@ for folder_name in existing_folder_names:
     temp_config = json.load(open(OUTPUT_DIR+folder_name+"/config.json"))
     if temp_config != config:
         continue
+    if os.path.exists(OUTPUT_DIR+folder_name+"/history.nc"):
+        continue
+
+    create_new_folder = False
     OUTPUT_DIR = OUTPUT_DIR+folder_name+"/"
-    create_new_folder
+
     break
 if create_new_folder:
     count = 0
@@ -70,7 +74,19 @@ if create_new_folder:
 
 params_list = []
 data_list = []
+def generate_gradation(n):
+    colors = []
+    start_color = (1.0, 0.2, 0.0)  # Red in RGB
 
+    end_color = (0.0, 0.2, 1.0)
+
+
+    for i in range(n):
+        t = i / (n-1)
+        color = tuple(start_color[j] + (end_color[j] - start_color[j]) * t for j in range(3))
+        colors.append(color)
+    
+    return colors
 for value in values_list:
     config[values_key] = value
     exist = False
@@ -80,11 +96,13 @@ for value in values_list:
         temp_config = json.load(open(DATA_DIR+folder_name+"/config.json"))
         if temp_config != config:
             continue
-        params_list.append(np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item())
+        if not os.path.exists(DATA_DIR+folder_name+"/history.nc"):
+            continue
         X = np.load(DATA_DIR+folder_name+"/data.npy")
         Z = np.load(DATA_DIR+folder_name+"/Z.npy")
-        params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
         C = np.load(DATA_DIR+folder_name+"/context.npy")
+        params = np.load(DATA_DIR+folder_name+"/params.npy", allow_pickle=True).item()
+        params_list.append(params)
         history_m = xr.open_dataset(DATA_DIR+folder_name+"/history.nc", drop_variables=list(params.keys() - {"m"}))
         data_list.append({
             "X":X,
@@ -104,7 +122,9 @@ if len(params_list) != len(values_list):
     print(len(params_list), len(values_list))
     sys.exit(1)
 #plot Convergence time
+
 convergence_time_list = []
+colors = generate_gradation(len(data_list))
 for data in data_list:
     history_m = data["history_m"]
     convergence_times = [compute_convergence_time(history_m.isel(iter=i), data['params']['m'][i-1],1/2) for i in range(1,history_m.dims['iter']-1)]
@@ -112,20 +132,19 @@ for data in data_list:
     print(convergence_time)
     convergence_time_list.append(convergence_time)
 fig, axs = plt.subplots(1)
-print(len(data_list))
-print(convergence_time_list)
-axs.bar(range(1, len(convergence_time_list) + 1), convergence_time_list)
-axs.set_title('Convergence Time for Different c_alpha Configurations')
+axs.bar(range(1, len(convergence_time_list) + 1), convergence_time_list, color=colors)
+# axs.set_title('Convergence Time for Different c_alpha Configurations')
 axs.set_xticks(range(1, len(convergence_time_list) + 1))
 axs.set_xticklabels([base_values[i] for i in range(len(convergence_time_list))])
 
-axs.set_ylabel('Convergence Time')
+# axs.set_ylabel('Convergence Time')
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "convergence_time.png"))
 plt.close(fig)
 
 
 
-    
-    
+        
+        
 
+print('folder_name:', OUTPUT_DIR)

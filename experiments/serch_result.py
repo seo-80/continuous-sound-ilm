@@ -232,7 +232,7 @@ conditions = [
     {
         "path": "generate_filter_name",
         "operator": "eq",
-        "value": "none"
+        "value": "missunderstand"
         # "value": "none"
     },
     {
@@ -355,6 +355,8 @@ if __name__ == "__main__":
                 'folder_name': folder_name,
                 'config': config
             })
+    # Sort configs list by folder_name
+    configs.sort(key=lambda x: x['folder_name'])
     for i in range(len(configs)):
         parser = argparse.ArgumentParser()
         parser.add_argument('-p', '--print_config', action='store_true')

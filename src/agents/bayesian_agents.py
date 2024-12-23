@@ -482,9 +482,23 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 self.X, self.C, self.Z = self.X.reshape(1, -1), self.C.reshape(1, -1), self.Z.reshape(1, -1)
             self._init_params(self.X, random_state=random_state)
         elif self.X is not None and self.C is not None:
-            self.X = np.vstack([self.X, data.X.values])
-            self.C = np.vstack([self.C, data.C.values])
-            self.Z = np.vstack([self.Z, data.Z.values])
+            if len(data.X.shape) != 1:
+                self.X = np.vstack([self.X, data.X.values.reshape(1, -1)])
+                self.C = np.vstack([self.C, data.C.values.reshape(1, -1)])
+                self.Z = np.vstack([self.Z, data.Z.values.reshape(1, -1)])
+                self._init_params(self.X, random_state=random_state)
+            else:
+                self.X = np.vstack([self.X, data.X.values])
+                self.C = np.vstack([self.C, data.C.values])
+                self.Z = np.vstack([self.Z, data.Z.values])
+                self._init_params(self.X, random_state=random_state)
+        # Count duplicated values in self.X
+        unique_values, counts = np.unique(self.X, axis=0, return_counts=True)
+        duplicate_mask = counts > 1
+        duplicate_values_num = counts[duplicate_mask].sum()
+        if duplicate_values_num > 0:
+            print("Warning: Duplicated values in X are detected.")
+            print(f"Number of duplicated values in X: {duplicate_values_num}/{len(self.X)}")
 
 
         r = self._e_like_step(self.X, self.C)
@@ -564,6 +578,7 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 while True:
                     count += 1
                     if count >= N:
+                        print("Warning: The number of excluded data exceeds the number of generated data.")
                         count = 0
                         data = source_agent.generate(N)
                     self._init_params(random_state=random_state)
