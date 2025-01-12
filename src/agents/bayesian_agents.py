@@ -1,6 +1,7 @@
 import numpy as np
 import xarray as xr
 from scipy.special import digamma, gammaln, gamma
+
 def logB(W, nu):
     D = W.shape[-1]
     return D * np.log(2) + D * digamma(nu/2) - nu/2 * np.linalg.slogdet(W)[1]
@@ -10,12 +11,29 @@ def logC(alpha):
 
 def multi_student_t(X, m, L, nu):
     D = X.shape[1]
+    # Convert xarray DataArray to numpy array if needed
+    if hasattr(X, 'values'):
+        X = X.values
+    if hasattr(m, 'values'):
+        m = m.values
+    if hasattr(L, 'values'):
+        L = L.values
+    if hasattr(nu, 'values'):
+        nu = nu.values
+    if len(m.shape) == 1:
+        m = m.reshape(1, -1)
+        
     diff = X - m
     log_part1 = gammaln((nu + D)/2)
     log_part2 = -gammaln(nu/2)
     log_part3 = -D/2 * np.log(nu*np.pi)
     log_part4 = -0.5 * np.log(np.linalg.det(L))
-    log_part5 = -(nu+D)/2 * np.log(1 + 1/nu * np.einsum("nj,jk,nk->n", diff, np.linalg.inv(L), diff))
+    
+    # Ensure all inputs are numpy arrays for einsum
+    diff = np.asarray(diff)
+    L_inv = np.linalg.inv(L)
+    quadratic_term = np.einsum("nj,jk,nk->n", diff, L_inv, diff)
+    log_part5 = -(nu+D)/2 * np.log(1 + 1/nu * quadratic_term)
 
     # Calculate the log of the final result
     log_result = log_part1 + log_part2 + log_part3 + log_part4 + log_part5
@@ -23,9 +41,7 @@ def multi_student_t(X, m, L, nu):
     # Convert the log result back to a regular number
     result = np.exp(log_result)
 
-    
     return result
-    # return gamma((nu + D)/2) / (gamma(nu/2) * np.power(nu*np.pi, D/2) * np.sqrt(np.linalg.det(L))) * np.power(1 + 1/nu * np.einsum("nj,jk,nk->n", diff, np.linalg.inv(L), diff), -(nu+D)/2)
 
 def filter_high_entropy(data, model, args):
     threshold = args["threshold"]
@@ -43,7 +59,7 @@ def filter_low_max_prob(data, model, args):
 def filter_missunderstand(data, model, args):
     p = model.predict_proba(data)
     listener_perception = np.argmax(p, axis=1)
-    speaker_perception = data["Z"].argmax(dim = "k").values
+    speaker_perception = data["Z"].argmax(dim="k").values
     return listener_perception == speaker_perception
 
 FILTER_DICT = {
@@ -54,234 +70,131 @@ FILTER_DICT = {
 }
 
 class BayesianGaussianMixtureModel:
-    # todo : add pi_mixture_ratio, c_alpha, mixture_pi
-    # ! this class is not complete
     def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
-        self.K = K
-        self.D = D
-        if isinstance(alpha0, (int, float, complex)):
-            self.alpha0 = alpha0 * np.ones(K)
-        elif alpha0.shape == (K,):
-            self.alpha0 = alpha0
-        else:
-            raise ValueError("The shape of alpha0 is invalid.")
-        if isinstance(beta0, (int, float, complex)):
-            self.beta0 = beta0 * np.ones(K)
-        elif beta0.shape == (K,):
-            self.beta0 = beta0
-        else:
-            raise ValueError("The shape of beta0 is invalid.")
-        if isinstance(nu0, (int, float, complex)):
-            self.nu0 = nu0 * np.ones(K)
-        elif nu0.shape == (K,):
-            self.nu0 = nu0
-        else:
-            raise ValueError("The shape of nu0 is invalid.")
-        if m0.shape == (D,):
-            self.m0 = np.tile(m0, (K, 1))
-        elif m0.shape == (K, D):
-            self.m0 = m0
-        else:
-            raise ValueError("The shape of m0 is invalid.")
-        
-        self.W0 = W0
+        self.params = xr.Dataset({
+            'K': K,
+            'D': D,
+            'alpha0': (['k'], alpha0 if isinstance(alpha0, np.ndarray) else alpha0 * np.ones(K)),
+            'beta0': (['k'], beta0 if isinstance(beta0, np.ndarray) else beta0 * np.ones(K)),
+            'nu0': (['k'], nu0 if isinstance(nu0, np.ndarray) else nu0 * np.ones(K)),
+            'm0': (['k', 'd'], m0 if m0.shape == (K, D) else np.tile(m0, (K, 1))),
+            'W0': (['k', 'd', 'd'], [xr.DataArray(W0, dims=['d', 'd']) for _ in range(K)]),
+            'c_alpha': (['k'] if c_alpha.ndim == 1 else ['c', 'k'], c_alpha if isinstance(c_alpha, np.ndarray) else c_alpha * np.ones(K)),
+            'pi_mixture_ratio': (['c'], pi_mixture_ratio if pi_mixture_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num) if isinstance(c_alpha, np.ndarray) and c_alpha.shape[0] != K else None
+        })
 
-        if isinstance(c_alpha, (int, float, complex)):
-            self.c_alpha = c_alpha * np.ones(K)
-        elif isinstance(c_alpha, np.ndarray) :
-            self.c_alpha = c_alpha
-            if c_alpha.shape == (K,):
-                self.mixture_pi = False
-            elif c_alpha.shape[1] == K:
-                self.mixture_pi = True
-                self.comopnent_num = c_alpha.shape[0]
-                self.pi_mixture_ratio = pi_mixture_ratio if pi_mixture_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num
-            else:
-                raise ValueError("The shape of c_alpha is invalid.")
-        else:
-            raise ValueError("The shape of c_alpha is invalid.")
-        
-
-        self.alpha = None
-        self.beta = None
-        self.nu = None
-        self.m = None
-        self.W = None
+        self.data = xr.Dataset()
+        self.state = xr.Dataset({
+            'alpha': (['k'], np.zeros(K)),
+            'beta': (['k'], np.zeros(K)),
+            'nu': (['k'], np.zeros(K)),
+            'm': (['k', 'd'], np.zeros((K, D))),
+            'W': (['k', 'd', 'd'], np.zeros((K, D, D)))
+        })
         self.lower_bound = None
-        self.X = None
         self._init_params()
-        if isinstance(fit_filter, str):
-            self.fit_filter = FILTER_DICT[fit_filter]
-        elif fit_filter is None or fit_filter == "none":
-            self.fit_filter = None
-        elif callable(fit_filter):
-            self.fit_filter = fit_filter
-        else:
-            raise ValueError("fit_filter must be a string, None, or a function")
-        
-        if isinstance(generate_filter, str):
-            self.generate_filter = FILTER_DICT[generate_filter]
-        elif generate_filter is None or fit_filter == "none":
-            self.generate_filter = None
-        elif callable(generate_filter):
-            self.generate_filter = generate_filter
-        else:
-            raise ValueError("generate_filter must be a string, None, or a function")
+
+        self.fit_filter = FILTER_DICT.get(fit_filter, fit_filter)
+        self.generate_filter = FILTER_DICT.get(generate_filter, generate_filter)
         self.fit_filter_args = fit_filter_args
         self.generate_filter_args = generate_filter_args
-        self.track_learning = track_learning    
+        self.track_learning = track_learning
         if self.track_learning:
             self.history = xr.Dataset()
         self.excluded_data = []
 
     def _init_params(self, X=None, random_state=None):
-        '''
-        Method for initializing model parameterse based on the size and variance of the input data array. 
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        random_state : int
-            int, specifying the seed for random initialization of m
-        '''
         if X is None:
-            N, D = 0, self.D
+            N, D = 0, self.params['D'].values
         else:
             N, D = X.shape
         rnd = np.random.RandomState(seed=random_state)
 
-        
-        self.alpha = self.alpha0 + N / self.K * np.ones(self.K)
-        self.beta = self.beta0 + N / self.K * np.ones(self.K)
-        self.nu = self.nu0 + N / self.K * np.ones(self.K)
-        self.m = self.m0 
-        self.W = np.tile(self.W0, (self.K, 1, 1))
-
+        self.state['alpha'] = self.params['alpha0'] + N / self.params['K'].values * np.ones(self.params['K'].values)
+        self.state['beta'] = self.params['beta0'] + N / self.params['K'].values * np.ones(self.params['K'].values)
+        self.state['nu'] = self.params['nu0'] + N / self.params['K'].values * np.ones(self.params['K'].values)
+        self.state['m'] = self.params['m0'] + rnd.randn(self.params['K'].values, self.params['D'].values)
+        print(self.params['W0'].values.shape)
+        print(self.state['W'].values.shape)
+        self.state['W'] = xr.DataArray(
+            self.params['W0'].values,
+            dims=['k', 'd', 'd'],
+            coords={
+                'k': np.arange(self.params['K'].values),
+                'd': np.arange(self.params['D'].values)
+            }
+        )
 
     def _e_like_step(self, X):
-        '''
-        Method for calculating the array corresponding to responsibility.
+        N, _ = X.shape
 
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-
-        Returns
-        ----------
-        r : 2D numpy array
-            2D numpy array representing responsibility of each component for each sample in X, 
-            where r[n, k] = $r_{n, k}$.
-
-        '''
-        N, _ = np.shape(X)
-
-        if self.c_alpha is None:
-            tpi = np.exp( digamma(self.alpha) - digamma(self.alpha.sum()) )
+        if self.params['c_alpha'] is None:
+            tpi = np.exp(digamma(self.state['alpha']) - digamma(self.state['alpha'].sum()))
         else:
-            if self.mixture_pi:
-                tpi = np.sum(self.c_alpha, axis=0)/np.sum(self.c_alpha)
+            if self.params['pi_mixture_ratio'] is not None:
+                tpi = np.sum(self.params['c_alpha'], axis=0) / np.sum(self.params['c_alpha'])
             else:
-                tpi = self.c_alpha/np.sum(self.c_alpha)
+                tpi = self.params['c_alpha'] / np.sum(self.params['c_alpha'])
 
-        arg_digamma = np.reshape(self.nu, (self.K, 1)) - np.reshape(np.arange(0, self.D, 1), (1, self.D))
-        tlam = np.exp( digamma(arg_digamma/2).sum(axis=1)  + self.D * np.log(2) + np.log(np.linalg.det(self.W)) )
+        arg_digamma = self.state['nu'].values.reshape(self.params['K'].values, 1) - np.arange(0, self.params['D'].values, 1).reshape(1, self.params['D'].values)
+        tlam = np.exp(digamma(arg_digamma / 2).sum(axis=1) + self.params['D'].values * np.log(2) + np.log(np.linalg.det(self.state['W'])))
 
-        diff = np.reshape(X, (N, 1, self.D) ) - np.reshape(self.m, (1, self.K, self.D) )
-        exponent = self.D / self.beta + self.nu * np.einsum("nkj,nkj->nk", np.einsum("nki,kij->nkj", diff, self.W), diff)
+        diff = X.values.reshape(N, 1, self.params['D'].values) - self.state['m'].values.reshape(1, self.params['K'].values, self.params['D'].values)
+        exponent = self.params['D'].values / self.state['beta'] + self.state['nu'] * np.einsum("nkj,nkj->nk", np.einsum("nki,kij->nkj", diff, self.state['W']), diff)
 
         exponent_subtracted = exponent - np.reshape(exponent.min(axis=1), (N, 1))
-        rho = tpi*np.sqrt(tlam)*np.exp( -0.5 * exponent_subtracted )
-        r = rho/np.reshape(rho.sum(axis=1), (N, 1))
+        rho = tpi * np.sqrt(tlam) * np.exp(-0.5 * exponent_subtracted)
+        r = rho / np.reshape(rho.sum(axis=1), (N, 1))
 
         return r
 
-
     def _m_like_step(self, X, r):
-        '''
-        Method for calculating the model parameters based on the responsibility.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        r : 2D numpy array
-            2-D numpy array representing responsibility of each component for each sample in X, 
-            where r[n, k] = $r_{n, k}$.
-        '''
-        N, _ = np.shape(X)
+        N, _ = X.shape
         n_samples_in_component = r.sum(axis=0)
-        barx = r.T @ X / np.reshape(n_samples_in_component, (self.K, 1))
-        diff = np.reshape(X, (N, 1, self.D) ) - np.reshape(barx, (1, self.K, self.D) )
-        S = np.einsum("nki,nkj->kij", np.einsum("nk,nki->nki", r, diff), diff) / np.reshape(n_samples_in_component, (self.K, 1, 1))
+        barx = r.T @ X / np.reshape(n_samples_in_component, (self.params['K'].values, 1))
+        diff = X.values.reshape(N, 1, self.params['D'].values) - barx.reshape(1, self.params['K'].values, self.params['D'].values)
+        S = np.einsum("nki,nkj->kij", np.einsum("nk,nki->nki", r, diff), diff) / np.reshape(n_samples_in_component, (self.params['K'].values, 1, 1))
 
-        self.alpha = self.alpha0 + n_samples_in_component
-        self.beta = self.beta0 + n_samples_in_component
-        self.nu = self.nu0 + n_samples_in_component
-        self.m = (self.m0 * self.beta0 + barx * np.reshape(n_samples_in_component, (self.K, 1)))/np.reshape(self.beta, (self.K, 1))
+        self.state['alpha'] = self.params['alpha0'] + n_samples_in_component
+        self.state['beta'] = self.params['beta0'] + n_samples_in_component
+        self.state['nu'] = self.params['nu0'] + n_samples_in_component
+        self.state['m'] = (self.params['beta0'] * self.params['m0'] + barx * np.reshape(n_samples_in_component, (self.params['K'].values, 1))) / np.reshape(self.state['beta'], (self.params['K'].values, 1))
 
-        diff2 = barx - self.m0
-        Winv = np.reshape(np.linalg.inv( self.W0 ), (1, self.D, self.D)) + \
-            S * np.reshape(n_samples_in_component, (self.K, 1, 1)) + \
-            np.reshape( self.beta0 * n_samples_in_component / (self.beta0 + n_samples_in_component), (self.K, 1, 1)) * np.einsum("ki,kj->kij",diff2,diff2) 
-        self.W = np.linalg.inv(Winv)
+        diff2 = barx - self.params['m0']
+        Winv = np.reshape(np.linalg.inv(self.params['W0']), (1, self.params['D'].values, self.params['D'].values)) + \
+            S * np.reshape(n_samples_in_component, (self.params['K'].values, 1, 1)) + \
+            np.reshape(self.params['beta0'] * n_samples_in_component / (self.params['beta0'] + n_samples_in_component), (self.params['K'].values, 1, 1)) * np.einsum("ki,kj->kij", diff2, diff2)
+        self.state['W'] = xr.DataArray(
+            np.linalg.inv(Winv),
+            dims=['k', 'd', 'd'],
+            coords={
+                'k': np.arange(self.params['K'].values),
+                'd': np.arange(self.params['D'].values)
+            }
+        )
 
     def _calc_lower_bound(self, r):
-        '''
-        Method for calculating the variational lower bound.
-
-        Parameters
-        ----------
-        r : 2D numpy array
-            2-D numpy array representing responsibility of each component for each sample in X, 
-            where r[n, k] = $r_{n, k}$.
-        Returns
-        ----------
-        lower_bound : float
-            The variational lower bound, where the final constant term is omitted.
-        '''
         r = np.clip(r, 1e-10, 1-1e-10)
         return - (r * np.log(r)).sum() + \
-            logC(self.alpha0) - logC(self.alpha) +\
-            self.D/2 * (np.log(self.beta0).sum() - np.log(self.beta).sum()) + \
-            self.K * logB(self.W0, self.nu0).sum() - logB(self.W, self.nu).sum()
-
+            logC(self.params['alpha0']) - logC(self.state['alpha']) + \
+            self.params['D'].values / 2 * (np.log(self.params['beta0']).sum() - np.log(self.state['beta']).sum()) + \
+            self.params['K'].values * logB(self.params['W0'], self.params['nu0']).sum() - logB(self.state['W'], self.state['nu']).sum()
 
     def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
-        '''
-        Method for fitting the model.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        max_iter : int
-            The maximum number of iteration
-        tol : float
-            The criterion for juding the convergence. 
-            When the change of lower bound becomes smaller than tol, the iteration is stopped.
-        random_state : int
-            An integer specifying the random number seed for random initialization
-        disp_message : Boolean
-            Whether to show the message on the result.
-        '''
         if self.fit_filter is not None and not self.fit_filter(data, self, self.fit_filter_args):
             return False
-        if self.X is None:
-            self.X = data.X.values
-            if len(self.X.shape) == 1:
-                self.X = self.X.reshape(1, -1)
-            self._init_params(self.X, random_state=random_state)
+        if self.data.sizes.get('n', 0) == 0:
+            self.data = data
+            self._init_params(self.data.X, random_state=random_state)
         else:
-            self.X = np.vstack([self.X, data.X.values])
+            self.data = xr.concat([self.data, data], dim='n')
 
-        r = self._e_like_step(self.X)
+        r = self._e_like_step(self.data.X)
         lower_bound = self._calc_lower_bound(r)
 
         for i in range(max_iter):
-            self._m_like_step(self.X, r)
-            r = self._e_like_step(self.X)
+            self._m_like_step(self.data.X, r)
+            r = self._e_like_step(self.data.X)
 
             lower_bound_prev = lower_bound
             lower_bound = self._calc_lower_bound(r)
@@ -296,236 +209,143 @@ class BayesianGaussianMixtureModel:
             print(f"convergend : {i < max_iter}")
             print(f"lower bound : {lower_bound}")
             print(f"Change in the variational lower bound : {lower_bound - lower_bound_prev}")
-        
+
         return True
 
     def fit_from_agent(self, source_agent, N, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
-        '''
-        Method for fitting the model based on the source agent.
-
-        Parameters
-        ----------
-        source_agent : BayesianGaussianMixtureModel
-            An instance of BayesianGaussianMixtureModel, which is used as the source of the training data.
-        N : int
-            The number of samples to be generated.
-        max_iter : int
-            The maximum number of iteration
-        tol : float
-            The criterion for juding the convergence. 
-            When the change of lower bound becomes smaller than tol, the iteration is stopped.
-        random_state : int
-            An integer specifying the random number seed for random initialization
-        disp_message : Boolean
-            Whether to show the message on the result.
-        '''
         X = source_agent.generate(N)
-        self.fit(X=X, max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message)
+        self.fit(X, max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message)
+
     def _predict_joint_proba(self, X):
-        '''
-        Method for calculating and returning the joint probability. 
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-
-        Returns
-        ----------
-        joint_proba : 2D numpy array
-            A numpy array with shape (len(X), self.K), where joint_proba[n, k] = joint probability p(X[n], z_k=1 | training data)
-        '''
-        L = np.reshape( (self.nu + 1 - self.D)*self.beta/(1 + self.beta), (self.K, 1,1) ) * self.W
-        tmp = np.zeros((len(X), self.K))
-        for k in range(self.K):
-            tmp[:,k] = multi_student_t(X, self.m[k], L[k], self.nu[k] + 1 - self.D)
-        return tmp * np.reshape(self.alpha/(self.alpha.sum()), (1, self.K))
+        L = np.reshape((self.state['nu'] + 1 - self.params['D'].values) * self.state['beta'] / (1 + self.state['beta']), (self.params['K'].values, 1, 1)) * self.state['W']
+        tmp = np.zeros((len(X), self.params['K'].values))
+        for k in range(self.params['K'].values):
+            tmp[:, k] = multi_student_t(X, self.state['m'][k], L[k], self.state['nu'][k] + 1 - self.params['D'].values)
+        return tmp * np.reshape(self.state['alpha'] / self.state['alpha'].sum(), (1, self.params['K'].values))
 
     def calc_prob_density(self, X):
-        '''
-        Method for calculating and returning the predictive density.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-
-        Returns
-        ----------
-        prob_density : 1D numpy array
-            A numpy array with shape (len(X), ), where proba[n] =  p(X[n] | training data)
-        '''
         joint_proba = self._predict_joint_proba(X)
         return joint_proba.sum(axis=1)
 
     def predict_proba(self, data):
-        '''
-        Method for calculating and returning the probability of belonging to each component.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-
-        Returns
-        ----------
-        proba : 2D numpy array
-            A numpy array with shape (len(X), self.K), where proba[n, k] =  p(z_k=1 | X[n], training data)
-        '''
         if isinstance(data, xr.Dataset):
             X = data.X.values
             if len(X.shape) == 1:
-                X= X.reshape(1, -1)
+                X = X.reshape(1, -1)
         else:
             X = data
         joint_proba = self._predict_joint_proba(X)
         return joint_proba / joint_proba.sum(axis=1).reshape(-1, 1)
 
     def predict(self, X):
-        '''
-        Method for predicting which component each input data belongs to.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-
-        Returns
-        ----------
-        pred : 1D numpy array
-            A numpy array with shape (len(X), ), where pred[n] =  argmax_{k} p(z_k=1 | X[n], training data)
-        '''
         proba = self.predict_proba(X)
         return proba.argmax(axis=1)
-    
+
     def generate(self, n_samples):
-        '''
-        Method for generating new data points based on the estimated model parameters.
-
-        Parameters
-        ----------
-        n_samples : int
-            The number of samples to be generated.
-
-        Returns
-        ----------
-        data : dict
-            A dictionary containing the generated data, where data['X'] is the generated data.
-        '''
-        if self.c_alpha is None:
-            alpha_norm = self.alpha / self.alpha.sum()
+        if self.params['c_alpha'] is None:
+            alpha_norm = self.state['alpha'] / self.state['alpha'].sum()
             z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
         else:
-            if self.mixture_pi:
-                comopnent_idx = np.random.choice(self.comopnent_num, size=n_samples, p=self.pi_mixture_ratio)
+            if self.params['pi_mixture_ratio'] is not None:
+                comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=n_samples, p=self.params['pi_mixture_ratio'].values)
                 z_new = []
                 for i in range(n_samples):
-                    alpha_norm = self.c_alpha[comopnent_idx[i]]/np.sum(self.c_alpha[comopnent_idx[i]])
+                    alpha_norm = self.params['c_alpha'][comopnent_idx[i]] / np.sum(self.params['c_alpha'][comopnent_idx[i]])
                     z_new.append(np.random.multinomial(1, alpha_norm, size=1))
                 z_new = np.vstack(z_new)
             else:
-               alpha_norm = self.c_alpha/np.sum(self.c_alpha)
-               z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
-        X_new = np.zeros((n_samples, self.D))
-        
-        for k in range(self.K):
+                alpha_norm = self.params['c_alpha'] / np.sum(self.params['c_alpha'])
+                z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
+        X_new = np.zeros((n_samples, self.params['D'].values))
+
+        for k in range(self.params['K'].values):
             idx = np.where(z_new[:, k] == 1)[0]
             if len(idx) > 0:
                 X_new[idx] = np.random.multivariate_normal(
-                    self.m[k], 
-                    np.linalg.inv(self.beta[k] * self.W[k]),
+                    self.state['m'][k],
+                    np.linalg.inv(self.state['beta'][k] * self.state['W'][k]),
                     size=len(idx)
                 )
-        
+
         ret_ds = xr.Dataset(
             {
                 'X': (['n', 'd'], X_new),
             },
-            coords={'n': np.arange(n_samples), 'd': np.arange(self.D)}
+            coords={'n': np.arange(n_samples), 'd': np.arange(self.params['D'].values)}
         )
         return ret_ds
-
+    
+    @property
+    def X(self):
+        return self.data.X
+    @property
+    def C(self):
+        return self.data.C
+    @property
+    def Z(self):
+        return self.data.Z
+    @property
+    def alpha(self):
+        return self.state.alpha
+    @property
+    def beta(self):
+        return self.state.beta
+    @property
+    def nu(self):
+        return self.state.nu
+    @property
+    def m(self):
+        return self.state.m
+    @property
+    def W(self):
+        return self.state.W
+    
 
 class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
     def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
         super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args, track_learning)
-        self.C = None
-        self.Z = None
+        self.data['C'] = (['n', 'k'], np.zeros((0, self.params['K'].values)))
+        self.data['Z'] = (['n', 'k'], np.zeros((0, self.params['K'].values)))
 
     def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
-        '''
-        Method for fitting the model.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        C : 2D numpy array
-            2D numpy array representing context data, where C[n, k] represents the k-th element of n-th point in C.
-        max_iter : int
-            The maximum number of iteration
-        tol : float
-            The criterion for juding the convergence. 
-            When the change of lower bound becomes smaller than tol, the iteration is stopped.
-        random_state : int
-            An integer specifying the random number seed for random initialization
-        disp_message : Boolean
-            Whether to show the message on the result.
-        '''
         if self.fit_filter is not None and not self.fit_filter(data, self, self.fit_filter_args):
             return False
-        if self.X is None and self.C is None:
-            self.X = data.X.values
-            self.C = data.C.values
-            self.Z = data.Z.values
-            if len(self.X.shape) == 1:
-                self.X, self.C, self.Z = self.X.reshape(1, -1), self.C.reshape(1, -1), self.Z.reshape(1, -1)
-            self._init_params(self.X, random_state=random_state)
-        elif self.X is not None and self.C is not None:
-            if len(data.X.shape) != 1:
-                self.X = np.vstack([self.X, data.X.values.reshape(1, -1)])
-                self.C = np.vstack([self.C, data.C.values.reshape(1, -1)])
-                self.Z = np.vstack([self.Z, data.Z.values.reshape(1, -1)])
-                self._init_params(self.X, random_state=random_state)
-            else:
-                self.X = np.vstack([self.X, data.X.values])
-                self.C = np.vstack([self.C, data.C.values])
-                self.Z = np.vstack([self.Z, data.Z.values])
-                self._init_params(self.X, random_state=random_state)
-        # Count duplicated values in self.X
-        unique_values, counts = np.unique(self.X, axis=0, return_counts=True)
+        if self.data.sizes.get('n', 0) == 0:
+            self.data = data
+            self._init_params(self.data.X, random_state=random_state)
+        else:
+            self.data = xr.concat([self.data, data], dim='n')
+
+        unique_values, counts = np.unique(self.data.X, axis=0, return_counts=True)
         duplicate_mask = counts > 1
         duplicate_values_num = counts[duplicate_mask].sum()
         if duplicate_values_num > 0:
             print("Warning: Duplicated values in X are detected.")
-            print(f"Number of duplicated values in X: {duplicate_values_num}/{len(self.X)}")
+            print(f"Number of duplicated values in X: {duplicate_values_num}/{len(self.data.X)}")
 
-
-        r = self._e_like_step(self.X, self.C)
+        r = self._e_like_step(self.data.X.values, self.data.C.values)
         lower_bound = self._calc_lower_bound(r)
 
         for i in range(max_iter):
-            self._m_like_step(self.X, r)
-            r = self._e_like_step(self.X, self.C)
+            self._m_like_step(self.data.X.values, r)
+            r = self._e_like_step(self.data.X.values, self.data.C.values)
 
             lower_bound_prev = lower_bound
             lower_bound = self._calc_lower_bound(r)
-            # Check if W is diverging
-            for k in range(self.K):
-                if not np.all(np.isfinite(self.W[k])):
+
+            for k in range(self.params['K'].values):
+                if not np.all(np.isfinite(self.state['W'][k].values)):
                     print(f"Warning: W[{k}] contains non-finite values")
-                    self._init_params(self.X, random_state=random_state)
-                
-                # Check eigenvalues to detect numerical instability
-                eigvals = np.linalg.eigvals(self.W[k])
+                    self._init_params(self.data.X, random_state=random_state)
+
+                eigvals = np.linalg.eigvals(self.state['W'][k])
                 if np.any(eigvals > 1e10) or np.any(eigvals < -1e10):
                     print(f"Warning: W[{k}] has very large eigenvalues indicating potential divergence")
-                    self._init_params(self.X, random_state=random_state)
+                    self._init_params(self.data.X, random_state=random_state)
             if abs(lower_bound - lower_bound_prev) < tol:
                 break
 
         self.lower_bound = lower_bound
-
 
         if disp_message:
             print(f"n_iter : {i}")
@@ -535,38 +355,19 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
         return True
 
     def fit_from_agent(self, source_agent, N, max_iter=1000, tol=0.0001, random_state=None, disp_message=False):
-        '''
-        Method for fitting the model based on the source agent.
-
-        Parameters
-        ----------
-        source_agent : BayesianGaussianMixtureModel
-            An instance of BayesianGaussianMixtureModel, which is used as the source of the training data.
-        N : int
-            The number of samples to be generated.
-        max_iter : int
-            The maximum number of iteration
-        tol : float
-            The criterion for juding the convergence. 
-            When the change of lower bound becomes smaller than tol, the iteration is stopped.
-        random_state : int
-            An integer specifying the random number seed for random initialization
-        disp_message : Boolean
-            Whether to show the message on the result.
-        '''
         data, excluded_data = source_agent.generate(N, return_excluded_data=True).values()
         self.excluded_data = excluded_data
 
         self.history = xr.Dataset({
-            'alpha': (['n', 'k'], np.zeros((N, self.K))),  # Changed dimensions to match 2D array
-            'beta': (['n', 'k'], np.zeros((N, self.K))),   # Changed dimensions to match 2D array
-            'nu': (['n', 'k'], np.zeros((N, self.K))),     # Changed dimensions to match 2D array
-            'm': (['n', 'k', 'd'], np.zeros((N, self.K, self.D))),  # Changed dimensions to match 3D array
-            'W': (['n', 'k', 'd', 'd'], np.zeros((N, self.K, self.D, self.D)))  # Changed dimensions to match 4D array
+            'alpha': (['n', 'k'], np.zeros((N, self.params['K'].values))),
+            'beta': (['n', 'k'], np.zeros((N, self.params['K'].values))),
+            'nu': (['n', 'k'], np.zeros((N, self.params['K'].values))),
+            'm': (['n', 'k', 'd'], np.zeros((N, self.params['K'].values, self.params['D'].values))),
+            'W': (['n', 'k', 'd', 'd'], np.zeros((N, self.params['K'].values, self.params['D'].values, self.params['D'].values)))
         }, coords={
             'n': np.arange(N),
-            'k': np.arange(self.K),
-            'd': np.arange(self.D)
+            'k': np.arange(self.params['K'].values),
+            'd': np.arange(self.params['D'].values)
         })
 
         if self.fit_filter is None and self.track_learning is False:
@@ -584,11 +385,11 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     self._init_params(random_state=random_state)
                     if self.fit(data.sel(n=count), max_iter=max_iter, tol=tol, random_state=random_state, disp_message=disp_message):
                         if self.track_learning:
-                            self.history['alpha'][i] = self.alpha
-                            self.history['beta'][i] = self.beta
-                            self.history['nu'][i] = self.nu
-                            self.history['m'][i] = self.m
-                            self.history['W'][i] = self.W
+                            self.history['alpha'][i] = self.state['alpha']
+                            self.history['beta'][i] = self.state['beta']
+                            self.history['nu'][i] = self.state['nu']
+                            self.history['m'][i] = self.state['m']
+                            self.history['W'][i] = self.state['W']
                         break
                     else:
                         excluded_data_list.append(data.sel(n=count))
@@ -598,129 +399,97 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 self.excluded_data = xr.Dataset()
 
     def _e_like_step(self, X, C):
-        '''
-        Method for calculating the array corresponding to responsibility.
+        N, _ = X.shape
 
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        C : 2D numpy array
-            2D numpy array representing context data, where C[n, k] represents the k-th element of n-th point in C.
-        Returns
-        ----------
-        r : 2D numpy array
-            2D numpy array representing responsibility of each component for each sample in X, 
-            where r[n, k] = $r_{n, k}$.
+        # Convert inputs to numpy arrays to avoid xarray dimension issues
+        tpi = C.values if hasattr(C, 'values') else C
+        nu = self.state['nu'].values if hasattr(self.state['nu'], 'values') else self.state['nu']
+        beta = self.state['beta'].values if hasattr(self.state['beta'], 'values') else self.state['beta']
+        W = self.state['W'].values if hasattr(self.state['W'], 'values') else self.state['W']
+        m = self.state['m'].values if hasattr(self.state['m'], 'values') else self.state['m']
+        D = self.params['D'].values if hasattr(self.params['D'], 'values') else self.params['D']
 
-        '''
-        N, _ = np.shape(X)
+        arg_digamma = nu.reshape(self.params['K'].values, 1) - np.arange(0, D, 1).reshape(1, D)
+        tlam = np.exp(digamma(arg_digamma / 2).sum(axis=1) + D * np.log(2) + np.log(np.linalg.det(W)))
 
-        tpi = self.C
-
-        arg_digamma = np.reshape(self.nu, (self.K, 1)) - np.reshape(np.arange(0, self.D, 1), (1, self.D))
-        tlam = np.exp( digamma(arg_digamma/2).sum(axis=1)  + self.D * np.log(2) + np.log(np.linalg.det(self.W)) )
-
-        diff = np.reshape(X, (N, 1, self.D) ) - np.reshape(self.m, (1, self.K, self.D) )
-        exponent = self.D / self.beta + self.nu * np.einsum("nkj,nkj->nk", np.einsum("nki,kij->nkj", diff, self.W), diff)
+        diff = X.reshape(N, 1, D) - m.reshape(1, self.params['K'].values, D)
+        exponent = D / beta + nu * np.einsum("nkj,nkj->nk", np.einsum("nki,kij->nkj", diff, W), diff)
 
         exponent_subtracted = exponent - np.reshape(exponent.min(axis=1), (N, 1))
-        rho = tpi*np.sqrt(tlam)*np.exp( -0.5 * exponent_subtracted )
-        r = rho/np.reshape(rho.sum(axis=1), (N, 1))
-
+        rho = tpi * np.sqrt(tlam) * np.exp(-0.5 * exponent_subtracted)
+        r = rho / np.reshape(rho.sum(axis=1), (N, 1))
 
         return r
+
     def _m_like_step(self, X, r):
-        '''
-        Method for calculating the model parameters based on the responsibility.
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        r : 2D numpy array
-            2-D numpy array representing responsibility of each component for each sample in X, 
-            where r[n, k] = $r_{n, k}$.
-        '''
-        N, _ = np.shape(X)
+        N, _ = X.shape
         n_samples_in_component = r.sum(axis=0)
-        barx = r.T @ X / np.reshape(n_samples_in_component, (self.K, 1))
-        diff = np.reshape(X, (N, 1, self.D) ) - np.reshape(barx, (1, self.K, self.D) )
-        S = np.einsum("nki,nkj->kij", np.einsum("nk,nki->nki", r, diff), diff) / np.reshape(n_samples_in_component, (self.K, 1, 1))
+        barx = r.T @ X / np.reshape(n_samples_in_component, (self.params['K'].values, 1))
+        diff = X.reshape(N, 1, self.params['D'].values) - barx.reshape(1, self.params['K'].values, self.params['D'].values)
+        S = np.einsum("nki,nkj->kij", np.einsum("nk,nki->nki", r, diff), diff) / np.reshape(n_samples_in_component, (self.params['K'].values, 1, 1))
 
-        self.alpha = self.alpha0 + n_samples_in_component
-        self.beta = self.beta0 + n_samples_in_component
-        self.nu = self.nu0 + n_samples_in_component
-        self.m = (self.beta0.reshape(-1, 1) * self.m0 + barx * np.reshape(n_samples_in_component, (self.K, 1)))/np.reshape(self.beta, (self.K, 1))
+        self.state['alpha'] = self.params['alpha0'] + n_samples_in_component
+        self.state['beta'] = self.params['beta0'] + n_samples_in_component
+        self.state['nu'] = self.params['nu0'] + n_samples_in_component
+        self.state['m'] = (self.params['beta0'] * self.params['m0'] + barx * np.reshape(n_samples_in_component, (self.params['K'].values, 1))) / np.reshape(self.state['beta'].values, (self.params['K'].values, 1))
 
-        diff2 = barx - self.m0
-        Winv = np.reshape(np.linalg.inv( self.W0 ), (1, self.D, self.D)) + \
-            S * np.reshape(n_samples_in_component, (self.K, 1, 1)) + \
-            np.reshape( self.beta0 * n_samples_in_component / (self.beta0 + n_samples_in_component), (self.K, 1, 1)) * np.einsum("ki,kj->kij",diff2,diff2) 
-        self.W = np.linalg.inv(Winv)
+        diff2 = barx - self.params['m0']
+        Winv = np.reshape(np.linalg.inv(self.params['W0']), (-1, self.params['D'].values, self.params['D'].values)) + \
+            S * np.reshape(n_samples_in_component, (self.params['K'].values, 1, 1)) + \
+            np.reshape((self.params['beta0'] * n_samples_in_component / (self.params['beta0'] + n_samples_in_component)).values, (self.params['K'].values, 1, 1)) * np.einsum("ki,kj->kij", diff2, diff2)
+        self.state['W'] = xr.DataArray(
+            np.linalg.inv(Winv),
+            dims=['k', 'd', 'd'],
+            coords={
+                'k': np.arange(self.params['K'].values),
+                'd': np.arange(self.params['D'].values)
+            }
+        )
 
-    def generate(self, n_samples,return_excluded_data=False):
-        # 結果を格納するリスト
+    def generate(self, n_samples, return_excluded_data=False):
         collected_datasets = []
         excluded_data = []
         n_filtered_samples = 0
-        
-        
+
         while n_filtered_samples < n_samples:
-            # サンプル生成のバッチサイズを決定
             batch_size = min(n_samples - n_filtered_samples, n_samples)
-            
-            # Z（潜在変数）とC（混合係数）の生成
-            if self.c_alpha is None:
-                alpha_norm = self.alpha / self.alpha.sum()
+
+            if self.params['c_alpha'].values[()] is None:
+                alpha_norm = self.state['alpha'] / self.state['alpha'].sum()
                 z_new = np.random.multinomial(1, alpha_norm, size=batch_size)
-                C_new = np.random.dirichlet(self.c_alpha, size=batch_size)
+                C_new = np.random.dirichlet(self.params['c_alpha'], size=batch_size)
             else:
-                if self.mixture_pi:
-                    comopnent_idx = np.random.choice(
-                        self.comopnent_num, 
-                        size=batch_size, 
-                        p=self.pi_mixture_ratio
-                    )
+                if self.params['pi_mixture_ratio'].values[()] is not None:
+                    comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=batch_size, p=self.params['pi_mixture_ratio'].values)
                     z_new = []
                     C_new = []
                     for i in range(batch_size):
-                        C_new_temp = np.random.dirichlet(
-                            self.c_alpha[comopnent_idx[i]], 
-                            size=1
-                        )[0]
+                        C_new_temp = np.random.dirichlet(self.params['c_alpha'][comopnent_idx[i]], size=1)[0]
                         C_new.append(C_new_temp)
                         z_new.append(np.random.multinomial(1, C_new_temp, size=1))
                     z_new = np.vstack(z_new)
                     C_new = np.vstack(C_new)
                 else:
-                    C_new_temp = np.random.dirichlet(self.c_alpha, size=batch_size)
-                    z_new = np.array([
-                        np.random.multinomial(1, C_new_temp[i], size=1)[0] 
-                        for i in range(batch_size)
-                    ])
+                    C_new_temp = np.random.dirichlet(self.params['c_alpha'], size=batch_size)
+                    z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1)[0] for i in range(batch_size)])
                     C_new = C_new_temp
-            
-            # X（観測データ）の生成
-            X_new = np.zeros((batch_size, self.D))
-            for k in range(self.K):
+
+            X_new = np.zeros((batch_size, self.params['D'].values))
+            for k in range(self.params['K'].values):
                 idx = np.where(z_new[:, k] == 1)[0]
                 if len(idx) > 0:
-
-                    # Validation check
-                    if not np.all(np.isfinite(self.W[k])):
+                    if not np.all(np.isfinite(self.state['W'][k].values)):
                         raise ValueError("W must be finite.")
-                    if not np.all(np.isfinite(self.m[k])):
+                    if not np.all(np.isfinite(self.state['m'][k].values)):
                         raise ValueError("m must be finite.")
-                    
-                    # Ensure that W is positive definite
-                    min_eig = np.min(np.linalg.eigvals(self.W[k]))
+
+                    min_eig = np.min(np.linalg.eigvals(self.state['W'][k]))
                     if min_eig < 0:
-                        self.W[k] -= 10 * min_eig * np.eye(self.D)
+                        self.state['W'][k] -= 10 * min_eig * np.eye(self.params['D'].values)
 
                     X_new[idx] = np.random.multivariate_normal(
-                        self.m[k],
-                        np.linalg.inv(self.beta[k] * self.W[k]),
+                        self.state['m'][k],
+                        np.linalg.inv(self.state['beta'][k].values * self.state['W'][k].values),
                         size=len(idx)
                     )
             temp_ret_ds = xr.Dataset(
@@ -731,12 +500,11 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                 },
                 coords={
                     'n': np.arange(n_filtered_samples, n_filtered_samples + batch_size),
-                    'd': np.arange(self.D),
-                    'k': np.arange(self.K)
+                    'd': np.arange(self.params['D'].values),
+                    'k': np.arange(self.params['K'].values)
                 }
             )
-            
-            # フィルタリング処理
+
             temp_excluded_data = None
             if self.generate_filter is not None:
                 filtered_index = self.generate_filter(temp_ret_ds, self, self.generate_filter_args)
@@ -745,13 +513,13 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             if temp_excluded_data is None:
                 temp_excluded_data = xr.Dataset(
                     {
-                        'X': (['n', 'd'], np.zeros((0, self.D))),
-                        'C': (['n', 'k'], np.zeros((0, self.K))),
-                        'Z': (['n', 'k'], np.zeros((0, self.K))),
+                        'X': (['n', 'd'], np.zeros((0, self.params['D'].values))),
+                        'C': (['n', 'k'], np.zeros((0, self.params['K'].values))),
+                        'Z': (['n', 'k'], np.zeros((0, self.params['K'].values))),
                     },
-                    coords={'n': [], 'd': np.arange(self.D), 'k': np.arange(self.K)}
+                    coords={'n': [], 'd': np.arange(self.params['D'].values), 'k': np.arange(self.params['K'].values)}
                 )
-            # 条件を満たすサンプルを追加
+
             if len(temp_ret_ds.X) > 0:
                 temp_n_samples = min(len(temp_ret_ds.X), n_samples - n_filtered_samples)
                 if temp_n_samples > 0:
@@ -759,49 +527,33 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
                     if return_excluded_data:
                         excluded_data.append(temp_excluded_data)
                     n_filtered_samples += temp_n_samples
-        
-        # すべてのデータセットを結合
+
         if collected_datasets:
             final_ds = xr.concat(collected_datasets, dim='n')
-            # インデックスを0から始まるように再調整
             final_ds = final_ds.assign_coords(n=np.arange(len(final_ds.n)))
-            
+
             if return_excluded_data:
-                if excluded_data:  # Only concatenate if we have excluded data
+                if excluded_data:
                     final_excluded_data = xr.concat(excluded_data, dim='n')
                     final_excluded_data = final_excluded_data.assign_coords(n=np.arange(len(final_excluded_data.n)))
-                else:  # Create empty dataset if no excluded data
+                else:
                     final_excluded_data = xr.Dataset(
                         {
-                            'X': (['n', 'd'], np.zeros((0, self.D))),
-                            'C': (['n', 'k'], np.zeros((0, self.K))),
-                            'Z': (['n', 'k'], np.zeros((0, self.K))),
+                            'X': (['n', 'd'], np.zeros((0, self.params['D'].values))),
+                            'C': (['n', 'k'], np.zeros((0, self.params['K'].values))),
+                            'Z': (['n', 'k'], np.zeros((0, self.params['K'].values))),
                         },
-                        coords={'n': [], 'd': np.arange(self.D), 'k': np.arange(self.K)}
+                        coords={'n': [], 'd': np.arange(self.params['D'].values), 'k': np.arange(self.params['K'].values)}
                     )
-                
+
                 return {
                     'data': final_ds,
                     'excluded_data': final_excluded_data
                 }
             else:
-                return final_ds                                               
-    
+                return final_ds
+
     def predict_proba(self, data):
-        '''
-        Method for calculating and returning the probability of belonging to each component.
-
-        Parameters
-        ----------
-        data : 2D numpy array or tuple of 2D numpy arrays
-            If data is a 2D numpy array, it represents input data X, where X[n, i] represents the i-th element of n-th point in X.
-            If data is a tuple of 2D numpy arrays (X, C), X[n, i] represents the i-th element of n-th point in X, and C[n, k] represents the k-th element of context for n-th point in X.
-
-        Returns
-        ----------
-        proba : 2D numpy array
-            A numpy array with shape (len(X), self.K), where proba[n, k] =  p(z_k=1 | X[n], C[n], training data)
-        '''
         if isinstance(data, tuple):
             X, C = data
         elif isinstance(data, xr.Dataset):
@@ -813,24 +565,10 @@ class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
             X = data
         joint_proba = self._predict_joint_proba(X, C)
         return joint_proba / joint_proba.sum(axis=1).reshape(-1, 1)
+
     def _predict_joint_proba(self, X, C):
-        '''
-        Method for calculating and returning the joint probability.     
-
-        Parameters
-        ----------
-        X : 2D numpy array
-            2D numpy array representing input data, where X[n, i] represents the i-th element of n-th point in X.
-        C : 2D numpy array
-            2D numpy array representing context data, where C[n, k] represents the k-th element of n-th point in C.
-
-        Returns
-        ----------
-        joint_proba : 2D numpy array
-            A numpy array with shape (len(X), self.K), where joint_proba[n, k] = joint probability p(X[n], z_k=1 | training data)
-        '''
-        L = np.reshape( (self.nu + 1 - self.D)*self.beta/(1 + self.beta), (self.K, 1,1) ) * self.W
-        tmp = np.zeros((len(X), self.K))
-        for k in range(self.K):
-            tmp[:,k] = multi_student_t(X, self.m[k], L[k], self.nu[k] + 1 - self.D)
+        L = np.reshape(((self.state['nu'] + 1 - self.params['D'].values) * self.state['beta'] / (1 + self.state['beta'])).values, (self.params['K'].values, 1, 1)) * self.state['W'].values
+        tmp = np.zeros((len(X), self.params['K'].values))
+        for k in range(self.params['K'].values):
+            tmp[:, k] = multi_student_t(X, self.state['m'][k], L[k], self.state['nu'][k] + 1 - self.params['D'].values)
         return tmp * C
