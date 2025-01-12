@@ -1,15 +1,13 @@
-import os
 import json
+import os
 
 data_dir = "data"
 
-rename_list = [
-    
-]
+rename_list = []
 delte_list = [
-    'true_K',
-    'true_m',
-    'true_Sigma',
+    "true_K",
+    "true_m",
+    "true_Sigma",
 ]
 
 for root, dirs, files in os.walk(data_dir):

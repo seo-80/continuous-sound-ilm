@@ -1,6 +1,7 @@
 import numpy as np
 import xarray as xr
-from scipy.special import digamma, gammaln, gamma
+from scipy.special import digamma, gamma, gammaln
+
 
 def logB(W, nu):
     D = W.shape[-1]
@@ -69,7 +70,7 @@ FILTER_DICT = {
     "none": None
 }
 
-class BayesianGaussianMixtureModel:
+class BayesianGMM:
     def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
         self.params = xr.Dataset({
             'K': K,
@@ -301,7 +302,7 @@ class BayesianGaussianMixtureModel:
         return self.state.W
     
 
-class BayesianGaussianMixtureModelWithContext(BayesianGaussianMixtureModel):
+class BayesianGMMWithContext(BayesianGMM):
     def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
         super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args, track_learning)
         self.data['C'] = (['n', 'k'], np.zeros((0, self.params['K'].values)))
