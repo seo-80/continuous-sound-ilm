@@ -1,10 +1,17 @@
 import argparse
 import hashlib
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List
+from abc import ABC, abstractmethod
+import numpy as np
+import xarray as xr
 import json
 import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
+import tqdm
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,52 +24,108 @@ from src.agents import BayesianGMM, BayesianGMMWithContext
 
 
 @dataclass
-class ExperimentConfig:
+class BaseExperimentConfig(ABC):
+    # 共通のパラメータ
     K: int  # 混合成分数
     D: int  # 次元数
     N: int  # サンプル数
     agent: str
-    alpha0: float
-    beta0: float
-    nu0: float
-    c_alpha: np.ndarray
-    m0: np.ndarray
-    W0: np.ndarray
     iter: int
-    fit_filter_name: str
-    generate_filter_name: str
-    fit_filter_args: Dict[str, Any]
-    generate_filter_args: Dict[str, Any]
+    fit_filter_name: str = "none"
+    generate_filter_name: str = "none"
+    fit_filter_args: Dict[str, Any] = field(default_factory=dict)
+    generate_filter_args: Dict[str, Any] = field(default_factory=dict)
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+    
+    @abstractmethod
+    def validate(self) -> bool:
+        """設定の妥当性を検証する"""
+        pass
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """設定を辞書形式に変換"""
+        return {
+            k: v.tolist() if isinstance(v, np.ndarray) else v 
+            for k, v in self.__dict__.items()
+        }
+
+@dataclass
+class BayesianGMMConfig(BaseExperimentConfig):
+    # BayesianGMM固有のパラメータ
+    alpha0: float = None
+    beta0: Optional[np.ndarray] = None
+    nu0: Optional[float] = None
+    m0: Optional[np.ndarray] = None
+    W0: Optional[np.ndarray] = None
+    
+    def validate(self) -> bool:
+        if self.agent != "BayesianGMM":
+            return False
+        if any(param is None for param in [self.alpha0, self.beta0, self.nu0, self.m0, self.W0]):
+            return False
+        return True
 
     @classmethod
-    def create_default_config(cls) -> "ExperimentConfig":
+    def create_default_config(cls) -> "BayesianGMMConfig":
         K = 4
         D = 2
         N = 500
 
         # Default parameters
-        c_alpha = np.array([1 / K for _ in range(K)])
         alpha0 = 100.0
-        # beta0 = np.array([1 if i%2 ==0 else 0.01 for i in range(K)])
         beta0 = np.array([0.1 for i in range(K)])
         nu0 = D + 2.0
         m0_range = 0
-        m0 = np.array(
-            [
-                [
-                    m0_range * np.cos(2 * np.pi * i / K),
-                    m0_range * np.sin(2 * np.pi * i / K),
-                ]
-                for i in range(K)
-            ]
-        )
-        # m0 = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
+        m0 = np.array([
+            [m0_range * np.cos(2 * np.pi * i / K), m0_range * np.sin(2 * np.pi * i / K)]
+            for i in range(K)
+        ])
         W0 = np.eye(D) * 0.02
 
         return cls(
-            K=K,
-            D=D,
-            N=N,
+            K=K, D=D, N=N,
+            agent="BayesianGMM",
+            alpha0=alpha0,
+            beta0=beta0,
+            nu0=nu0,
+            m0=m0,
+            W0=W0,
+            iter=10
+        )
+
+@dataclass
+class BayesianGMMWithContextConfig(BayesianGMMConfig):
+    # BayesianGMMWithContext固有のパラメータ
+    c_alpha: Optional[np.ndarray] = None
+    
+    def validate(self) -> bool:
+        if self.agent != "BayesianGMMWithContext":
+            return False
+        if not super().validate() or self.c_alpha is None:
+            return False
+        return True
+
+
+    @classmethod
+    def create_default_config(cls) -> "BayesianGMMWithContextConfig":
+        K = 4
+        D = 2
+        N = 500
+
+        # Default parameters
+        c_alpha = np.array([1/K for _ in range(K)])
+        alpha0 = 100.0
+        beta0 = np.array([0.1 for i in range(K)])
+        nu0 = D + 2.0
+        m0_range = 0
+        m0 = np.array([
+            [m0_range * np.cos(2 * np.pi * i / K), m0_range * np.sin(2 * np.pi * i / K)]
+            for i in range(K)
+        ])
+        W0 = np.eye(D) * 0.02
+
+        return cls(
+            K=K, D=D, N=N,
             agent="BayesianGMMWithContext",
             alpha0=alpha0,
             beta0=beta0,
@@ -70,96 +133,70 @@ class ExperimentConfig:
             c_alpha=c_alpha,
             m0=m0,
             W0=W0,
-            iter=100,
-            fit_filter_name="none",
-            generate_filter_name="missunderstand",
-            fit_filter_args={},
-            generate_filter_args={},
+            iter=10
         )
-
-        # weght = 4
-        # c_alpha = np.array([[2*(weght-1)/weght/K,2*(weght-1)/weght/K, 2/weght/K, 2/weght/K], [2/weght/K, 2/weght/K, 2*(weght-1)/weght/K,2*(weght-1)/weght/K,]])
-        # alpha0 = 100.0
-        # beta0 = np.array([1 if i%2 ==0 else 0.01 for i in range(K)])
-        # beta0 = np.array([8 for i in range(K)])
-        # nu0 = D + 2.0
-        # m0_range = 10
-        # m0 = np.array([[m0_range*np.cos(2*np.pi*i/K), m0_range*np.sin(2*np.pi*i/K)] for i in range(K)])
-        # m0 = np.array([[0, 0], [0, 0], [0, 0], [0, 0]])
-        # W0 = np.eye(D)*0.02
-
-        # return cls(
-        #     K=K, D=D, N=N,
-        #     agent="BayesianGMMWithContext",
-        #     alpha0=alpha0, beta0=beta0, nu0=nu0,
-        #     c_alpha=c_alpha, m0=m0, W0=W0,
-        #     iter=1000,
-        #     fit_filter_name="none",
-        #     generate_filter_name="missunderstand",
-        #     fit_filter_args={},
-        #     generate_filter_args={},
-        # )
+@ dataclass
+class BayesianGMMWithContextWithAttenuationConfig(BayesianGMMWithContextConfig):
+    # BayesianGMMWithContextWithAttenuation固有のパラメータ
+    S: int = None
+    s_alpha0: Optional[np.ndarray] = None
+    context_mix_ratio: Optional[float] = None
+    
+    def validate(self) -> bool:
+        if self.agent != "BayesianGMMWithContextWithAttenuation":
+            return False
+        if not super().validate() or self.s_alpha0 is None or self.context_mix_ratio is None:
+            return False
+        return True
 
     @classmethod
-    def load_config(cls, path: str):
-        with open(path, "r") as f:
-            config = json.load(f)
-        # Convert lists to numpy arrays if they exist in config
-        if isinstance(config["beta0"], list):
-            config["beta0"] = np.array(config["beta0"])
-        if isinstance(config["m0"], list):
-            config["m0"] = np.array(config["m0"])
-        if isinstance(config["W0"], list):
-            config["W0"] = np.array(config["W0"])
-        if isinstance(config["c_alpha"], list):
-            config["c_alpha"] = np.array(config["c_alpha"])
+    def create_default_config(cls) -> "BayesianGMMWithContextWithAttenuationConfig":
+        K = 4
+        D = 2
+        N = 500
 
-        # !応急処置 configの修正
-        m0_range = 5
-        K = config["K"]
-        m0 = np.array(
-            [
-                [
-                    m0_range * np.cos(2 * np.pi * i / K),
-                    m0_range * np.sin(2 * np.pi * i / K),
-                ]
-                for i in range(K)
-            ]
-        )
-        # # # m0 = np.array([[4,5],[4,-5],[2,5],[2,-5],[0,5],[0,-5],[-2,5],[-2,-5]])
-        config["m0"] = m0
-        # beta0 = np.array([10 if i%2 ==0 else 1 for i in range(K)])
-        # config["beta0"] = beta0
-        # beta0 = np.array([10 for i in range(config["K"    ])])
-        # config["beta0"] = beta0
-        # config['generate_filter_name'] = "missunderstand"
-        config["iter"] = 10
+        # Default parameters
+        c_alpha = np.array([1/K for _ in range(K)])
+        alpha0 = 100.0
+        beta0 = np.array([0.1 for i in range(K)])
+        nu0 = D + 2.0
+        m0_range = 0
+        m0 = np.array([
+            [m0_range * np.cos(2 * np.pi * i / K), m0_range * np.sin(2 * np.pi * i / K)]
+            for i in range(K)
+        ])
+        W0 = np.eye(D) * 0.02
+        s_alpha0 = np.ones((K, 1))
+        context_mix_ratio = 0.5
 
-        ret_config = cls(
-            K=config["K"],
-            D=config["D"],
-            N=config["N"],
-            agent=config["agent"],
-            alpha0=config["alpha0"],
-            beta0=config["beta0"],
-            nu0=config["nu0"],
-            c_alpha=np.array(config["c_alpha"]),
-            m0=np.array(config["m0"]),
-            W0=np.array(config["W0"]),
-            iter=config["iter"],
-            fit_filter_name=config["fit_filter_name"],
-            generate_filter_name=config["generate_filter_name"],
-            fit_filter_args=config["fit_filter_args"],
-            generate_filter_args=config["generate_filter_args"],
+        return cls(
+            K=K, D=D, N=N,
+            agent="BayesianGMMWithContextWithAttenuation",
+            alpha0=alpha0,
+            beta0=beta0,
+            nu0=nu0,
+            c_alpha=c_alpha,
+            m0=m0,
+            W0=W0,
+            s_alpha0=s_alpha0,
+            context_mix_ratio=context_mix_ratio,
+            iter=10
         )
 
-        return ret_config
-
+# ファクトリー関数
+def create_config(config_dict: Dict[str, Any]) -> BaseExperimentConfig:
+    agent_type = config_dict["agent"]
+    if agent_type == "BayesianGMM":
+        return BayesianGMMConfig(**config_dict)
+    elif agent_type == "BayesianGMMWithContext":
+        return BayesianGMMWithContextConfig(**config_dict)
+    elif agent_type == "BayesianGMMWithContextWithAttenuation":
+        return BayesianGMMWithContextWithAttenuationConfig(**config_dict)
+    else:
+        raise ValueError(f"Unknown agent type: {agent_type}")
 
 class ExperimentManager:
-    def __init__(
-        self, config: ExperimentConfig, save_dir: str, track_learning: bool = False
-    ):
+    def __init__(self, config: BaseExperimentConfig, save_dir: str, track_learning: bool = False):
         self.config = config
         self.save_dir = save_dir
         self.setup_data_directory()
@@ -174,41 +211,27 @@ class ExperimentManager:
             "m": np.zeros((config.iter, config.K, config.D)),
             "W": np.zeros((config.iter, config.K, config.D, config.D)),
         }
-        self.X = []
-        self.C = []
-        self.Z = []
+        self.X: List[np.ndarray] = []
+        self.C: List[np.ndarray] = []
+        self.Z: List[np.ndarray] = []
         self.excluded_data = []
         self.retry_counts = []
+
         if self.track_learning:
             self.history = xr.Dataset(
                 {
-                    "alpha": (
-                        ["iter", "n", "k"],
-                        np.zeros((config.iter, config.N, config.K)),
-                    ),
-                    "beta": (
-                        ["iter", "n", "k"],
-                        np.zeros((config.iter, config.N, config.K)),
-                    ),
-                    "nu": (
-                        ["iter", "n", "k"],
-                        np.zeros((config.iter, config.N, config.K)),
-                    ),
-                    "m": (
-                        ["iter", "n", "k", "d"],
-                        np.zeros((config.iter, config.N, config.K, config.D)),
-                    ),
-                    "W": (
-                        ["iter", "n", "k", "d", "d"],
-                        np.zeros((config.iter, config.N, config.K, config.D, config.D)),
-                    ),
+                    "alpha": (["iter", "n", "k"], np.zeros((config.iter, config.N, config.K))),
+                    "beta": (["iter", "n", "k"], np.zeros((config.iter, config.N, config.K))),
+                    "nu": (["iter", "n", "k"], np.zeros((config.iter, config.N, config.K))),
+                    "m": (["iter", "n", "k", "d"], np.zeros((config.iter, config.N, config.K, config.D))),
+                    "W": (["iter", "n", "k", "d", "d"], np.zeros((config.iter, config.N, config.K, config.D, config.D))),
                 },
                 coords={
                     "iter": np.arange(config.iter),
                     "n": np.arange(config.N),
                     "K": np.arange(config.K),
                     "d": np.arange(config.D),
-                },
+                }
             )
 
     def setup_data_directory(self):
@@ -217,101 +240,32 @@ class ExperimentManager:
         self.save_path = os.path.join(self.save_dir, folder_name)
         os.makedirs(self.save_path, exist_ok=True)
 
-    def generate_initial_data(self) -> tuple:
-        """初期データの生成"""
-        # np.random.seed(0)
-        true_K = self.config.K
-        true_means = self.config.m0
-        true_covars = np.array([np.eye(2) * 0.1 for _ in range(true_K)])
-        true_alpha = np.array([1 for _ in range(true_K)])
-        N = self.config.N
-        D = 2
-
-        X_0 = np.zeros((N, D))
-        C_0 = np.random.dirichlet(true_alpha, size=N)
-        z_0 = np.array([np.random.multinomial(1, c) for c in C_0])
-
-        for k in range(true_K):
-            X_0[z_0[:, k] == 1] = np.random.multivariate_normal(
-                true_means[k], true_covars[k], size=np.sum(z_0[:, k] == 1)
-            )
-        initial_data = xr.Dataset(
-            {"X": (["n", "d"], X_0), "C": (["n", "k"], C_0), "Z": (["n", "k"], z_0)},
-            coords={
-                "n": np.arange(N),
-                "d": np.arange(self.config.D),
-                "k": np.arange(self.config.K),
-            },
-        )
-
-        return initial_data
-
-    def create_agent(
-        self, is_parent: bool = False, track_learning: bool = False
-    ) -> Any:
+    def create_agent(self, is_parent: bool = False, track_learning: bool = False) -> Any:
         """エージェントの作成"""
+        agent_params = {
+            "K": self.config.K,
+            "D": self.config.D,
+            "alpha0": self.config.alpha0,
+            "beta0": self.config.beta0,
+            "nu0": self.config.nu0,
+            "m0": self.config.m0,
+            "W0": self.config.W0,
+            "track_learning": track_learning
+        }
+
         if self.config.agent == "BayesianGMMWithContext":
-            return BayesianGMMWithContext(
-                self.config.K,
-                self.config.D,
-                self.config.alpha0,
-                self.config.beta0,
-                self.config.nu0,
-                self.config.m0,
-                self.config.W0,
-                self.config.c_alpha,
-                fit_filter="none" if is_parent else self.config.fit_filter_name,
-                fit_filter_args=self.config.fit_filter_args,
-                generate_filter=(
-                    "none" if is_parent else self.config.generate_filter_name
-                ),
-                generate_filter_args=self.config.generate_filter_args,
-                track_learning=track_learning,
-            )
+            agent_params.update({
+                "c_alpha": self.config.c_alpha,
+                "fit_filter": "none" if is_parent else self.config.fit_filter_name,
+                "fit_filter_args": self.config.fit_filter_args,
+                "generate_filter": "none" if is_parent else self.config.generate_filter_name,
+                "generate_filter_args": self.config.generate_filter_args,
+            })
+            return BayesianGMMWithContext(**agent_params)
         elif self.config.agent == "BayesianGMM":
-            return BayesianGMM(
-                self.config.K,
-                self.config.D,
-                self.config.alpha0,
-                self.config.beta0,
-                self.config.nu0,
-                self.config.m0,
-                self.config.W0,
-                self.config.c_alpha,
-                track_learning=self.track_learning,
-            )
-
-    def fit_parent_agent(
-        self, X_0: np.ndarray, C_0: np.ndarray, z_0: np.ndarray
-    ) -> Any:
-        """親エージェントの学習"""
-        parent_agent = self.create_agent(is_parent=True)
-
-        if self.config.agent == "BayesianGMMWithContext":
-            data = xr.Dataset(
-                {
-                    "X": (["n", "d"], X_0),
-                    "C": (["n", "k"], C_0),
-                    "Z": (["n", "k"], z_0),
-                },
-                coords={
-                    "n": np.arange(self.config.N),
-                    "d": np.arange(self.config.D),
-                    "k": np.arange(self.config.K),
-                },
-            )
+            return BayesianGMM(**agent_params)
         else:
-            data = xr.Dataset(
-                {
-                    "X": (["n", "d"], X_0),
-                },
-                coords={"n": np.arange(self.config.N), "d": np.arange(self.config.D)},
-            )
-
-        parent_agent.fit(
-            data, max_iter=1000, tol=1e-6, random_state=0, disp_message=True
-        )
-        return parent_agent
+            raise ValueError(f"Unknown agent type: {self.config.agent}")
 
     def run_experiment(self):
         """実験の実行"""
@@ -324,18 +278,14 @@ class ExperimentManager:
 
         for i in tqdm.tqdm(range(self.config.iter)):
             child_agent = self.create_agent(
-                track_learning=(
-                    (i == self.config.iter - 1)
-                    if self.track_learning == "Final"
-                    else self.track_learning
-                )
+                track_learning=(i == self.config.iter - 1) if self.track_learning == "Final" else self.track_learning
             )
             retry_count = []
             child_agent.fit_from_agent(parent_agent, N=self.config.N)
 
             self.retry_counts.append(retry_count)
             self.X.append(child_agent.X)
-            if self.config.agent == "BayesianGMMWithContext":
+            if isinstance(self.config, BayesianGMMWithContextConfig):
                 self.C.append(child_agent.C)
             self.Z.append(child_agent.Z)
 
@@ -346,6 +296,7 @@ class ExperimentManager:
             self.params["m"][i] = child_agent.m
             self.params["W"][i] = child_agent.W
             self.excluded_data.append(child_agent.excluded_data)
+
             if self.track_learning is True or self.track_learning == "Final":
                 self.history["alpha"][i] = child_agent.history["alpha"]
                 self.history["beta"][i] = child_agent.history["beta"]
@@ -358,58 +309,50 @@ class ExperimentManager:
     def save_results(self):
         """結果の保存"""
         np.save(os.path.join(self.save_path, "data.npy"), self.X)
-        if self.config.agent == "BayesianGMMWithContext":
+        if isinstance(self.config, BayesianGMMWithContextConfig):
             np.save(os.path.join(self.save_path, "context.npy"), self.C)
             np.save(os.path.join(self.save_path, "Z.npy"), self.Z)
         np.save(os.path.join(self.save_path, "retry_counts.npy"), self.retry_counts)
         np.save(os.path.join(self.save_path, "params.npy"), self.params)
+
         # save excluded data
-        print(self.excluded_data)
         try:
             excluded_data_combined = xr.concat(self.excluded_data, dim="iter")
-            print(excluded_data_combined)
-            excluded_data_combined.to_netcdf(
-                os.path.join(self.save_path, "excluded_data.nc")
-            )
+            excluded_data_combined.to_netcdf(os.path.join(self.save_path, "excluded_data.nc"))
         except:
-            print("error")
+            print("Error saving excluded data")
 
-        # Convert config to JSON-serializable format
-        config_dict = {
-            k: v.tolist() if isinstance(v, np.ndarray) else v
-            for k, v in self.config.__dict__.items()
-        }
-
+        # Save config
         with open(os.path.join(self.save_path, "config.json"), "w") as f:
-            json.dump(config_dict, f)
+            json.dump(self.config.to_dict(), f)
+
         if self.track_learning:
             self.history.to_netcdf(os.path.join(self.save_path, "history.nc"))
-
 
 def main(folder_name: str):
     DATA_DIR = os.path.dirname(__file__) + "/../data/"
 
     # 設定の作成
-    if folder_name is not "None":
-        config = ExperimentConfig.load_config(
-            os.path.join(DATA_DIR, folder_name, "config.json")
-        )
+    if folder_name != "None":
+        if folder_name.endswith('.json'):
+            with open(folder_name, 'r') as f:
+                config_dict = json.load(f)
+            config = create_config(config_dict)
+        else:
+            with open(os.path.join(DATA_DIR, folder_name, "config.json"), 'r') as f:
+                config_dict = json.load(f)
+            config = create_config(config_dict)
     else:
-        config = ExperimentConfig.create_default_config()
+        config = BayesianGMMWithContextConfig.create_default_config()
 
-    # # 実験の実行
-    # experiment = ExperimentManager(config, DATA_DIR,track_learning=True)
-    experiment = ExperimentManager(config, DATA_DIR, track_learning="Final")
+    # 実験の実行
     experiment = ExperimentManager(config, DATA_DIR)
     experiment.run_experiment()
     experiment.save_results()
     print(experiment.save_path)
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "folder_name", nargs="?", type=str, default="None", help="input file path"
-    )
+    parser.add_argument("folder_name", nargs="?", type=str, default="None", help="input file path")
     folder_name = parser.parse_args().folder_name
     main(folder_name)

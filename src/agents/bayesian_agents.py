@@ -71,7 +71,7 @@ FILTER_DICT = {
 }
 
 class BayesianGMM:
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, context_mix_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
         self.params = xr.Dataset({
             'K': K,
             'D': D,
@@ -81,7 +81,7 @@ class BayesianGMM:
             'm0': (['k', 'd'], m0 if m0.shape == (K, D) else np.tile(m0, (K, 1))),
             'W0': (['k', 'd', 'd'], [xr.DataArray(W0, dims=['d', 'd']) for _ in range(K)]),
             'c_alpha': (['k'] if c_alpha.ndim == 1 else ['c', 'k'], c_alpha if isinstance(c_alpha, np.ndarray) else c_alpha * np.ones(K)),
-            'pi_mixture_ratio': (['c'], pi_mixture_ratio if pi_mixture_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num) if isinstance(c_alpha, np.ndarray) and c_alpha.shape[0] != K else None
+            'context_mix_ratio': (['c'], context_mix_ratio if context_mix_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num) if isinstance(c_alpha, np.ndarray) and c_alpha.shape[0] != K else None
         })
 
         self.data = xr.Dataset()
@@ -111,20 +111,39 @@ class BayesianGMM:
             N, D = X.shape
         rnd = np.random.RandomState(seed=random_state)
 
-        self.state['alpha'] = self.params['alpha0'] + N / self.params['K'].values * np.ones(self.params['K'].values)
-        self.state['beta'] = self.params['beta0'] + N / self.params['K'].values * np.ones(self.params['K'].values)
-        self.state['nu'] = self.params['nu0'] + N / self.params['K'].values * np.ones(self.params['K'].values)
-        self.state['m'] = self.params['m0'] + rnd.randn(self.params['K'].values, self.params['D'].values)
-        print(self.params['W0'].values.shape)
-        print(self.state['W'].values.shape)
-        self.state['W'] = xr.DataArray(
-            self.params['W0'].values,
-            dims=['k', 'd', 'd'],
-            coords={
-                'k': np.arange(self.params['K'].values),
-                'd': np.arange(self.params['D'].values)
-            }
-        )
+        # Calculate N divided by total dimensions for each parameter
+        alpha_shape = self.state['alpha'].shape
+        beta_shape = self.state['beta'].shape 
+        nu_shape = self.state['nu'].shape
+        m_shape = self.state['m'].shape
+
+        alpha_dims = np.prod(alpha_shape)
+        beta_dims = np.prod(beta_shape)
+        nu_dims = np.prod(nu_shape)
+
+        self.state['alpha'] = self.params['alpha0'] + N/alpha_dims * np.ones(alpha_shape)
+        self.state['beta'] = self.params['beta0'] + N/beta_dims * np.ones(beta_shape)
+        self.state['nu'] = self.params['nu0'] + N/nu_dims * np.ones(nu_shape)
+        self.state['m'] = self.params['m0'] + rnd.randn(*m_shape)
+        if len(self.params['W0'].values.shape) == 4:  # (k,s,d,d) case
+            self.state['W'] = xr.DataArray(
+                self.params['W0'].values,
+                dims=['k', 's', 'd', 'd'],
+                coords={
+                    'k': np.arange(self.params['K'].values),
+                    's': np.arange(self.params['W0'].values.shape[1]),
+                    'd': np.arange(self.params['D'].values)
+                }
+            )
+        else:  # (k,d,d) case
+            self.state['W'] = xr.DataArray(
+                self.params['W0'].values,
+                dims=['k', 'd', 'd'],
+                coords={
+                    'k': np.arange(self.params['K'].values),
+                    'd': np.arange(self.params['D'].values)
+                }
+            )
 
     def _e_like_step(self, X):
         N, _ = X.shape
@@ -132,7 +151,7 @@ class BayesianGMM:
         if self.params['c_alpha'] is None:
             tpi = np.exp(digamma(self.state['alpha']) - digamma(self.state['alpha'].sum()))
         else:
-            if self.params['pi_mixture_ratio'] is not None:
+            if self.params['context_mix_ratio'] is not None:
                 tpi = np.sum(self.params['c_alpha'], axis=0) / np.sum(self.params['c_alpha'])
             else:
                 tpi = self.params['c_alpha'] / np.sum(self.params['c_alpha'])
@@ -247,8 +266,8 @@ class BayesianGMM:
             alpha_norm = self.state['alpha'] / self.state['alpha'].sum()
             z_new = np.random.multinomial(1, alpha_norm, size=n_samples)
         else:
-            if self.params['pi_mixture_ratio'] is not None:
-                comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=n_samples, p=self.params['pi_mixture_ratio'].values)
+            if self.params['context_mix_ratio'] is not None:
+                comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=n_samples, p=self.params['context_mix_ratio'].values)
                 z_new = []
                 for i in range(n_samples):
                     alpha_norm = self.params['c_alpha'][comopnent_idx[i]] / np.sum(self.params['c_alpha'][comopnent_idx[i]])
@@ -303,11 +322,10 @@ class BayesianGMM:
     
 
 class BayesianGMMWithContext(BayesianGMM):
-    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
-        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, pi_mixture_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args, track_learning)
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, context_mix_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
+        super().__init__(K, D, alpha0, beta0, nu0, m0, W0, c_alpha, context_mix_ratio, fit_filter, fit_filter_args, generate_filter, generate_filter_args, track_learning)
         self.data['C'] = (['n', 'k'], np.zeros((0, self.params['K'].values)))
         self.data['Z'] = (['n', 'k'], np.zeros((0, self.params['K'].values)))
-
     def fit(self, data, max_iter=1e3, tol=1e-4, random_state=None, disp_message=False):
         if self.fit_filter is not None and not self.fit_filter(data, self, self.fit_filter_args):
             return False
@@ -460,8 +478,8 @@ class BayesianGMMWithContext(BayesianGMM):
                 z_new = np.random.multinomial(1, alpha_norm, size=batch_size)
                 C_new = np.random.dirichlet(self.params['c_alpha'], size=batch_size)
             else:
-                if self.params['pi_mixture_ratio'].values[()] is not None:
-                    comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=batch_size, p=self.params['pi_mixture_ratio'].values)
+                if self.params['context_mix_ratio'].values[()] is not None:
+                    comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=batch_size, p=self.params['context_mix_ratio'].values)
                     z_new = []
                     C_new = []
                     for i in range(batch_size):
@@ -573,3 +591,196 @@ class BayesianGMMWithContext(BayesianGMM):
         for k in range(self.params['K'].values):
             tmp[:, k] = multi_student_t(X, self.state['m'][k], L[k], self.state['nu'][k] + 1 - self.params['D'].values)
         return tmp * C
+
+class BayesianGMMWithContextWithAttenuation(BayesianGMMWithContext):
+    def __init__(self, K, D, alpha0, beta0, nu0, m0, W0, c_alpha, S=None, s_alpha0=None, context_mix_ratio=None, fit_filter=None, fit_filter_args=None, generate_filter=None, generate_filter_args=None, track_learning=False):
+        if S is None:
+            S = 1
+        self.params = xr.Dataset({
+            'K': K,
+            'D': D,
+            'S': S,
+            'alpha0': (['k'], alpha0 if isinstance(alpha0, np.ndarray) else alpha0 * np.ones(K)),
+            's_alpha0': (['k', 's'], s_alpha0 if isinstance(s_alpha0, np.ndarray) else np.ones((K, S))),
+            'beta0': (['k', 's'], beta0 if isinstance(beta0, np.ndarray) else (beta0 * np.ones(K)).reshape(K, S)),
+            'nu0': (['k', 's'], nu0 if isinstance(nu0, np.ndarray) else nu0 * np.ones(K)),
+            'm0': (['k', 's', 'd'], m0 if m0.shape == (K, S, D) else np.tile(m0, (K, 1))),
+            'W0': (['k', 's', 'd', 'd'], [[xr.DataArray(W0, dims=['d', 'd']) for _ in range(S)]for _ in range(K)]),
+            'c_alpha': (['k'] if c_alpha.ndim == 1 else ['c', 'k'], c_alpha if isinstance(c_alpha, np.ndarray) else c_alpha * np.ones(K)),
+            'context_mix_ratio': (['c'], context_mix_ratio if context_mix_ratio is not None else np.ones(self.comopnent_num)/self.comopnent_num) if isinstance(c_alpha, np.ndarray) and c_alpha.shape[0] != K else None
+        })
+
+        self.data = xr.Dataset()
+        self.state = xr.Dataset({
+            'alpha': (['k'], np.zeros(K)),
+            's_alpha': (['k', 's'], np.zeros((K, S))),
+            'beta': (['k', 's'], np.zeros((K, S))),
+            'nu': (['k', 's'], np.zeros((K, S))),
+            'm': (['k', 's', 'd'], np.zeros((K, S, D))),
+            'W': (['k', 's', 'd', 'd'], np.zeros((K, S, D, D)))
+        })  
+        self.lower_bound = None
+        self._init_params()
+
+        self.fit_filter = FILTER_DICT.get(fit_filter, fit_filter)
+        self.generate_filter = FILTER_DICT.get(generate_filter, generate_filter)
+        self.fit_filter_args = fit_filter_args
+        self.generate_filter_args = generate_filter_args
+        self.track_learning = track_learning
+        if self.track_learning:
+            self.history = xr.Dataset()
+        self.excluded_data = []
+    def _init_params(self, random_state=None):
+        super()._init_params(random_state=random_state)
+        self.state['s_alpha'] = self.params['s_alpha0'] + np.ones((self.params['K'].values, self.params['S'].values))
+        
+    def _e_like_step(self, X, C):
+        N, _ = X.shape
+        K = self.params['K'].values
+        S = self.state['s_alpha'].shape[1]  # Get number of states
+        D = self.params['D'].values if hasattr(self.params['D'], 'values') else self.params['D']
+        
+        # Convert inputs to numpy arrays to avoid xarray dimension issues
+        tpi = C.values if hasattr(C, 'values') else C  # (N, K)
+        spi = self.state['s_alpha'].values if hasattr(self.state['s_alpha'], 'values') else self.state['s_alpha']  # (K, S)
+        nu = self.state['nu'].values if hasattr(self.state['nu'], 'values') else self.state['nu']  # (K, S)
+        beta = self.state['beta'].values if hasattr(self.state['beta'], 'values') else self.state['beta']  # (K, S) 
+        W = self.state['W'].values if hasattr(self.state['W'], 'values') else self.state['W']  # (K, S, D, D)
+        m = self.state['m'].values if hasattr(self.state['m'], 'values') else self.state['m']  # (K, S, D)
+
+        # Calculate digamma terms for each state
+        arg_digamma = nu.reshape(K, S, 1) - np.arange(0, D, 1).reshape(1, 1, D)  # (K, S, D)
+        tlam = np.exp(digamma(arg_digamma / 2).sum(axis=2) + D * np.log(2) + \
+               np.array([np.log(np.linalg.det(W[k,s])) for k in range(K) for s in range(S)]).reshape(K, S))  # (K, S)
+
+        # Calculate differences and exponents for each state
+        diff = X.reshape(N, 1, 1, D) - m.reshape(1, K, S, D)  # (N, K, S, D)
+        
+        # Compute matrix products for each state
+        exponent = D / beta.reshape(1, K, S) + \
+                  nu.reshape(1, K, S) * np.einsum("nksj,nksj->nks", 
+                      np.einsum("nksi,ksij->nksj", diff, W.reshape(K, S, D, D)), diff)  # (N, K, S)
+
+        # Subtract minimum for numerical stability
+        exponent_subtracted = exponent - np.reshape(exponent.min(axis=(1,2)), (N, 1, 1))  # (N, K, S)
+        
+        # Calculate responsibilities
+        rho = tpi.reshape(N, K, 1) * spi.reshape(1, K, S) * np.sqrt(tlam.reshape(1, K, S)) * np.exp(-0.5 * exponent_subtracted)  # (N, K, S)
+        r = rho / np.reshape(rho.sum(axis=(1,2)), (N, 1, 1))  # (N, K, S)
+
+        return r
+
+    
+
+    def generate(self, n_samples, return_excluded_data=False):
+        collected_datasets = []
+        excluded_data = []
+        n_filtered_samples = 0
+
+        while n_filtered_samples < n_samples:
+            batch_size = min(n_samples - n_filtered_samples, n_samples)
+
+            if self.params['c_alpha'].values[()] is None:#! 未実装
+                alpha_norm = self.state['alpha'] / self.state['alpha'].sum()
+                z_new = np.random.multinomial(1, alpha_norm, size=batch_size)
+                C_new = np.random.dirichlet(self.params['c_alpha'], size=batch_size)
+            else:
+                if self.params['context_mix_ratio'].values[()] is not None:#! 未実装
+                    comopnent_idx = np.random.choice(self.params['c_alpha'].shape[0], size=batch_size, p=self.params['context_mix_ratio'].values)
+                    z_new = []
+                    C_new = []
+                    for i in range(batch_size):
+                        C_new_temp = np.random.dirichlet(self.params['c_alpha'][comopnent_idx[i]], size=1)[0]
+                        C_new.append(C_new_temp)
+                        z_new.append(np.random.multinomial(1, C_new_temp, size=1))
+                    z_new = np.vstack(z_new)
+                    C_new = np.vstack(C_new)
+                else:
+                    C_new_temp = np.random.dirichlet(self.params['c_alpha'], size=batch_size)
+                    z_new = np.array([np.random.multinomial(1, C_new_temp[i], size=1)[0] for i in range(batch_size)])
+                    y_new = np.array([np.random.multinomial(1, np.random.dirichlet(self.state['s_alpha'][z_new[i].argmax()]), size=1)[0] for i in range(batch_size)])
+                    C_new = C_new_temp
+
+            X_new = np.zeros((batch_size, self.params['D'].values))
+            for k in range(self.params['K'].values):
+                for s in range(self.params['S'].values):
+                    idx = np.where((z_new[:, k] == 1) & (y_new[:, s] == 1))[0]
+                    if len(idx) > 0:
+                        if not np.all(np.isfinite(self.state['W'][k,s].values)):
+                            raise ValueError("W must be finite.")
+                        if not np.all(np.isfinite(self.state['m'][k,s].values)):
+                            raise ValueError("m must be finite.")
+
+                        min_eig = np.min(np.linalg.eigvals(self.state['W'][k,s]))
+                        if min_eig < 0:
+                            self.state['W'][k,s] -= 10 * min_eig * np.eye(self.params['D'].values)
+
+                        X_new[idx] = np.random.multivariate_normal(
+                            self.state['m'][k,s],
+                            np.linalg.inv(self.state['beta'][k,s].values * self.state['W'][k,s].values),
+                            size=len(idx)
+                        )
+            temp_ret_ds = xr.Dataset(
+                {
+                    'X': (['n', 'd'], X_new),
+                    'C': (['n', 'k'], C_new),
+                    'Z': (['n', 'k'], z_new),
+                    'Y': (['n', 's'], y_new)
+                },
+                coords={
+                    'n': np.arange(n_filtered_samples, n_filtered_samples + batch_size),
+                    'd': np.arange(self.params['D'].values),
+                    'k': np.arange(self.params['K'].values),
+                    's': np.arange(self.params['S'].values)
+                }
+            )
+
+            temp_excluded_data = None
+            if self.generate_filter is not None:
+                filtered_index = self.generate_filter(temp_ret_ds, self, self.generate_filter_args)
+                temp_excluded_data = temp_ret_ds.isel(n=~filtered_index)
+                temp_ret_ds = temp_ret_ds.isel(n=filtered_index)
+            if temp_excluded_data is None:
+                temp_excluded_data = xr.Dataset(
+                    {
+                        'X': (['n', 'd'], np.zeros((0, self.params['D'].values))),
+                        'C': (['n', 'k'], np.zeros((0, self.params['K'].values))),
+                        'Z': (['n', 'k'], np.zeros((0, self.params['K'].values))),
+                        'Y': (['n', 's'], np.zeros((0, self.params['S'].values)))
+                    },
+                    coords={'n': [], 'd': np.arange(self.params['D'].values), 'k': np.arange(self.params['K'].values), 's': np.arange(self.params['S'].values)}
+                )
+
+            if len(temp_ret_ds.X) > 0:
+                temp_n_samples = min(len(temp_ret_ds.X), n_samples - n_filtered_samples)
+                if temp_n_samples > 0:
+                    collected_datasets.append(temp_ret_ds.isel(n=slice(0, temp_n_samples)))
+                    if return_excluded_data:
+                        excluded_data.append(temp_excluded_data)
+                    n_filtered_samples += temp_n_samples
+
+        if collected_datasets:
+            final_ds = xr.concat(collected_datasets, dim='n')
+            final_ds = final_ds.assign_coords(n=np.arange(len(final_ds.n)))
+
+            if return_excluded_data:
+                if excluded_data:
+                    final_excluded_data = xr.concat(excluded_data, dim='n')
+                    final_excluded_data = final_excluded_data.assign_coords(n=np.arange(len(final_excluded_data.n)))
+                else:
+                    final_excluded_data = xr.Dataset(
+                        {
+                            'X': (['n', 'd'], np.zeros((0, self.params['D'].values))),
+                            'C': (['n', 'k'], np.zeros((0, self.params['K'].values))),
+                            'Z': (['n', 'k'], np.zeros((0, self.params['K'].values))),
+                            'Y': (['n', 's'], np.zeros((0, self.params['S'].values)))
+                        },
+                        coords={'n': [], 'd': np.arange(self.params['D'].values), 'k': np.arange(self.params['K'].values), 's': np.arange(self.params['S'].values)}
+                    )
+
+                return {
+                    'data': final_ds,
+                    'excluded_data': final_excluded_data
+                }
+            else:
+                return final_ds
