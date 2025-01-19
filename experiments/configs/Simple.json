@@ -1,0 +1,25 @@
+{
+    "K": 1,
+    "D": 2,
+    "N": 1000,
+    "c_alpha": [
+        1
+    ],
+    "agent": "BayesianGMMWithContext",
+    "alpha0": 100.0,
+    "beta0": [1],
+    "nu0": 4.0,
+    "m0": [
+        [5, 5]
+    ],
+    "W0": [
+        [0.02, 0], [0, 0.02]
+    ],
+    "iter": 100,
+    "fit_filter_name": "none",
+    "fit_filter_args": {
+    },
+    "generate_filter_name": "none",
+    "generate_filter_args": {
+    }
+}

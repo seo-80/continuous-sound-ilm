@@ -20,9 +20,9 @@ import tqdm
 import xarray as xr
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from src.agents import BayesianGMM, BayesianGMMWithContext
+from src.agents import BayesianGMM, BayesianGMMWithContext, BayesianGMMWithContextWithAttenuation
 
-
+print('start')
 @dataclass
 class BaseExperimentConfig(ABC):
     # 共通のパラメータ
@@ -36,9 +36,20 @@ class BaseExperimentConfig(ABC):
     fit_filter_args: Dict[str, Any] = field(default_factory=dict)
     generate_filter_args: Dict[str, Any] = field(default_factory=dict)
     extra_params: Dict[str, Any] = field(default_factory=dict)
+    def convert_lists_to_arrays(self) -> None:
+        """Convert all list attributes to numpy arrays"""
+        for key, value in self.__dict__.items():
+            if isinstance(value, list):
+                setattr(self, key, np.array(value))
+            elif isinstance(value, dict):
+                # Convert lists inside dictionaries
+                for k, v in value.items():
+                    if isinstance(v, list):
+                        value[k] = np.array(v)
     
     @abstractmethod
     def validate(self) -> bool:
+
         """設定の妥当性を検証する"""
         pass
     
@@ -196,12 +207,12 @@ def create_config(config_dict: Dict[str, Any]) -> BaseExperimentConfig:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
 class ExperimentManager:
-    def __init__(self, config: BaseExperimentConfig, save_dir: str, track_learning: bool = False):
+    def __init__(self, config: BaseExperimentConfig, save_dir: str, track_learning: bool = False, save_as_dataset: bool = True):
         self.config = config
         self.save_dir = save_dir
         self.setup_data_directory()
         self.track_learning = track_learning
-        print(config)
+        self.save_as_dataset = save_as_dataset
 
         # Initialize storage for results
         self.params = {
@@ -211,9 +222,16 @@ class ExperimentManager:
             "m": np.zeros((config.iter, config.K, config.D)),
             "W": np.zeros((config.iter, config.K, config.D, config.D)),
         }
-        self.X: List[np.ndarray] = []
-        self.C: List[np.ndarray] = []
-        self.Z: List[np.ndarray] = []
+
+        if save_as_dataset:
+            # Store everything in a single xarray Dataset
+            self.data = xr.Dataset()
+            self.params = xr.Dataset()
+        else:
+            # Store as separate lists/arrays
+            self.X: List[np.ndarray] = []
+            self.C: List[np.ndarray] = []
+            self.Z: List[np.ndarray] = []
         self.excluded_data = []
         self.retry_counts = []
 
@@ -224,16 +242,17 @@ class ExperimentManager:
                     "beta": (["iter", "n", "k"], np.zeros((config.iter, config.N, config.K))),
                     "nu": (["iter", "n", "k"], np.zeros((config.iter, config.N, config.K))),
                     "m": (["iter", "n", "k", "d"], np.zeros((config.iter, config.N, config.K, config.D))),
-                    "W": (["iter", "n", "k", "d", "d"], np.zeros((config.iter, config.N, config.K, config.D, config.D))),
+                    "W": (["iter", "n", "k", "d1", "d2"], np.zeros((config.iter, config.N, config.K, config.D, config.D))),
                 },
                 coords={
                     "iter": np.arange(config.iter),
                     "n": np.arange(config.N),
                     "K": np.arange(config.K),
                     "d": np.arange(config.D),
+                    "d1": np.arange(config.D),
+                    "d2": np.arange(config.D),
                 }
             )
-
     def setup_data_directory(self):
         """実験データ保存用のディレクトリを設定"""
         folder_name = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -264,6 +283,18 @@ class ExperimentManager:
             return BayesianGMMWithContext(**agent_params)
         elif self.config.agent == "BayesianGMM":
             return BayesianGMM(**agent_params)
+        elif self.config.agent == "BayesianGMMWithContextWithAttenuation":
+            agent_params.update({
+                "S": self.config.S,
+                "s_alpha0": self.config.s_alpha0,
+                "c_alpha": self.config.c_alpha,
+                "context_mix_ratio": self.config.context_mix_ratio,
+                "fit_filter": "none" if is_parent else self.config.fit_filter_name,
+                "fit_filter_args": self.config.fit_filter_args,
+                "generate_filter": "none" if is_parent else self.config.generate_filter_name,
+                "generate_filter_args": self.config.generate_filter_args,
+            })
+            return BayesianGMMWithContextWithAttenuation(**agent_params)
         else:
             raise ValueError(f"Unknown agent type: {self.config.agent}")
 
@@ -282,19 +313,22 @@ class ExperimentManager:
             )
             retry_count = []
             child_agent.fit_from_agent(parent_agent, N=self.config.N)
-
+            if self.save_as_dataset:
+                self.data = xr.concat([self.data, child_agent.data], dim="iter")
+                self.params = xr.concat([self.params, child_agent.state], dim="iter")
+            else:
+                self.X.append(child_agent.X)
+                self.Z.append(child_agent.Z)
+                if isinstance(self.config, BayesianGMMWithContextConfig):
+                    self.C.append(child_agent.C)
+                # パラメータの保存
+                self.params["alpha"][i] = child_agent.alpha
+                self.params["beta"][i] = child_agent.beta
+                self.params["nu"][i] = child_agent.nu
+                self.params["m"][i] = child_agent.m
+                self.params["W"][i] = child_agent.W
             self.retry_counts.append(retry_count)
-            self.X.append(child_agent.X)
-            if isinstance(self.config, BayesianGMMWithContextConfig):
-                self.C.append(child_agent.C)
-            self.Z.append(child_agent.Z)
 
-            # パラメータの保存
-            self.params["alpha"][i] = child_agent.alpha
-            self.params["beta"][i] = child_agent.beta
-            self.params["nu"][i] = child_agent.nu
-            self.params["m"][i] = child_agent.m
-            self.params["W"][i] = child_agent.W
             self.excluded_data.append(child_agent.excluded_data)
 
             if self.track_learning is True or self.track_learning == "Final":
@@ -308,12 +342,16 @@ class ExperimentManager:
 
     def save_results(self):
         """結果の保存"""
-        np.save(os.path.join(self.save_path, "data.npy"), self.X)
-        if isinstance(self.config, BayesianGMMWithContextConfig):
-            np.save(os.path.join(self.save_path, "context.npy"), self.C)
-            np.save(os.path.join(self.save_path, "Z.npy"), self.Z)
+        if self.save_as_dataset:
+            self.data.to_netcdf(os.path.join(self.save_path, "data.nc"))
+            self.params.to_netcdf(os.path.join(self.save_path, "params.nc"))
+        else:
+            np.save(os.path.join(self.save_path, "data.npy"), self.X)
+            if isinstance(self.config, BayesianGMMWithContextConfig):
+                np.save(os.path.join(self.save_path, "context.npy"), self.C)
+                np.save(os.path.join(self.save_path, "Z.npy"), self.Z)
+            np.save(os.path.join(self.save_path, "params.npy"), self.params)
         np.save(os.path.join(self.save_path, "retry_counts.npy"), self.retry_counts)
-        np.save(os.path.join(self.save_path, "params.npy"), self.params)
 
         # save excluded data
         try:
@@ -344,7 +382,7 @@ def main(folder_name: str):
             config = create_config(config_dict)
     else:
         config = BayesianGMMWithContextConfig.create_default_config()
-
+    config.convert_lists_to_arrays()
     # 実験の実行
     experiment = ExperimentManager(config, DATA_DIR)
     experiment.run_experiment()
